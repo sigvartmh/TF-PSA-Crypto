@@ -732,35 +732,41 @@ psa_status_t mbedtls_psa_platform_get_builtin_key(
 
 #define PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE        ((psa_key_type_t) 0x4400)
 #define PSA_KEY_TYPE_SPAKE2P_KEY_PAIR_BASE          ((psa_key_type_t) 0x7400)
+#define PSA_KEY_TYPE_SPAKE2P_CURVE_MASK             ((psa_key_type_t) 0x00ff)
 
 /** SPAKE2+ key pair.
  *
  * Not implemented yet.
  */
 #define PSA_KEY_TYPE_SPAKE2P_KEY_PAIR(curve)            \
-    (PSA_KEY_TYPE_SPAKE2P_KEY_PAIR_BASE | (curve))
+    (PSA_KEY_TYPE_SPAKE2P_KEY_PAIR_BASE | ((curve) & PSA_KEY_TYPE_SPAKE2P_CURVE_MASK))
 
 /** SPAKE2+ public key.
  *
  * Not implemented yet.
  */
 #define PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY(curve)          \
-    (PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE | (curve))
+    (PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE | ((curve) & PSA_KEY_TYPE_SPAKE2P_CURVE_MASK))
 
 /** Whether a key type is a SPAKE2+ key pair type. */
 #define PSA_KEY_TYPE_IS_SPAKE2P_KEY_PAIR(type)          \
-    (((type) & ~PSA_KEY_TYPE_ECC_CURVE_MASK) ==         \
+    (((type) & ~PSA_KEY_TYPE_SPAKE2P_CURVE_MASK) ==         \
      PSA_KEY_TYPE_SPAKE2P_KEY_PAIR_BASE)
 
 /** Whether a key type is a SPAKE2+ public key type. */
 #define PSA_KEY_TYPE_IS_SPAKE2P_PUBLIC_KEY(type)        \
-    (((type) & ~PSA_KEY_TYPE_ECC_CURVE_MASK) ==         \
+    (((type) & ~PSA_KEY_TYPE_SPAKE2P_CURVE_MASK) ==         \
      PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE)
 
 /** Whether a key type is a SPAKE2+ key pair or public key type. */
 #define PSA_KEY_TYPE_IS_SPAKE2P(type)                   \
     ((PSA_KEY_TYPE_PUBLIC_KEY_OF_KEY_PAIR(type) &       \
-      ~PSA_KEY_TYPE_ECC_CURVE_MASK) == PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE)
+      ~PSA_KEY_TYPE_SPAKE2P_CURVE_MASK) == PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE)
+
+#define PSA_KEY_TYPE_SPAKE2P_GET_FAMILY(type) \
+    ((psa_ecc_family_t) (PSA_KEY_TYPE_IS_SPAKE2P(type) ? \
+                         ((type) & PSA_KEY_TYPE_SPAKE2P_CURVE_MASK) : \
+                         0))
 
 #define PSA_ALG_SPAKE2P_HMAC_BASE               ((psa_algorithm_t) 0x0a000400)
 
@@ -2107,6 +2113,43 @@ static inline struct psa_pake_operation_s psa_pake_operation_init(void)
     const struct psa_pake_operation_s v = PSA_PAKE_OPERATION_INIT;
     return v;
 }
+
+/**
+ * \brief Import a SPAKE2P public or private key into a buffer.
+ *
+ * This function parses and validates SPAKE2P key data, storing the key material
+ * in the provided buffer. It supports both public and private key types as defined
+ * by the attributes parameter. The imported key is prepared for use in subsequent
+ * cryptographic operations, such as password-authenticated key exchange.
+ *
+ * \param[in] attributes         Key attributes describing the type and usage of the key.
+ * \param[in] data               Buffer containing the key data to import.
+ * \param      data_length       Size of the \p data buffer in bytes.
+ * \param[out] key_buffer        Buffer to hold the imported key material.
+ * \param      key_buffer_size   Size of the \p key_buffer in bytes.
+ * \param[out] key_buffer_length On success, the number of bytes written to \p key_buffer.
+ * \param[out] bits              On success, the bit-size of the imported key.
+ *
+ * \retval #PSA_SUCCESS
+ *         The key was imported successfully.
+ * \retval #PSA_ERROR_INVALID_ARGUMENT
+ *         The key data is invalid or incompatible with the attributes.
+ * \retval #PSA_ERROR_BUFFER_TOO_SMALL
+ *         The provided buffer is too small for the key material.
+ * \retval #PSA_ERROR_NOT_SUPPORTED
+ *         The key type or format is not supported.
+ * \retval #PSA_ERROR_CORRUPTION_DETECTED
+ *         A corruption was detected during import.
+ */
+psa_status_t psa_spake2p_import_key(
+    const psa_key_attributes_t *attributes,
+    const uint8_t *data,
+    size_t data_length,
+    uint8_t *key_buffer,
+    size_t key_buffer_size,
+    size_t *key_buffer_length,
+    size_t *bits);
+
 
 #ifdef __cplusplus
 }
