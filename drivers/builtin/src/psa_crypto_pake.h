@@ -156,4 +156,35 @@ psa_status_t mbedtls_psa_pake_get_implicit_key(
  */
 psa_status_t mbedtls_psa_pake_abort(mbedtls_psa_pake_operation_t *operation);
 
+/** Import a SPAKE2+ key in binary format.
+ *
+ * \note The signature of this function is that of a PSA driver
+ *       import_key entry point. This function behaves as an import_key
+ *       entry point as defined in the PSA driver interface specification for
+ *       transparent drivers.
+ *
+ * \param[in]  attributes       The attributes for the key to import.
+ * \param[in]  data             The buffer containing the key data in import
+ *                              format.
+ * \param[in]  data_length      Size of the \p data buffer in bytes.
+ * \param[out] key_buffer       The buffer where the imported key will be written.
+ * \param[in]  key_buffer_size  Size of the \p key_buffer buffer in bytes. This
+ *                              size is greater or equal to \p data_length.
+ * \param[out] key_buffer_length  The length of the data written in \p
+ *                                key_buffer in bytes.
+ * \param[out] bits             The key size in number of bits.
+ *
+ * \retval #PSA_SUCCESS  The SPAKE2+ key was imported successfully.
+ * \retval #PSA_ERROR_INVALID_ARGUMENT
+ *         The key data is not correctly formatted or the attributes do not specify a valid SPAKE2+ key type or algorithm.
+ * \retval #PSA_ERROR_NOT_SUPPORTED \emptydescription
+ * \retval #PSA_ERROR_INSUFFICIENT_MEMORY \emptydescription
+ * \retval #PSA_ERROR_CORRUPTION_DETECTED \emptydescription
+ */
+psa_status_t mbedtls_psa_spake2p_import_key(
+    const psa_key_attributes_t *attributes,
+    const uint8_t *data, size_t data_length,
+    uint8_t *key_buffer, size_t key_buffer_size,
+    size_t *key_buffer_length, size_t *bits);
+
 #endif /* PSA_CRYPTO_PAKE_H */

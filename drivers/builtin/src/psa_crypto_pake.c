@@ -565,6 +565,89 @@ psa_status_t mbedtls_psa_pake_abort(mbedtls_psa_pake_operation_t *operation)
     return PSA_SUCCESS;
 }
 
+static psa_status_t mbedtls_psa_spake2p_import_public_key(psa_ecc_family_t key_type,
+                                                          psa_key_bits_t key_bits,
+                                                          const uint8_t *data,
+                                                          size_t data_length,
+                                                          uint8_t *key_buffer,
+                                                          size_t key_buffer_size,
+                                                          size_t *key_buffer_length,
+                                                          size_t *bits)
+{
+    psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
+    psa_ecc_family_t family = PSA_KEY_TYPE_SPAKE2P_GET_FAMILY(key_type);
+
+    size_t w0_size = PSA_BITS_TO_BYTES(key_bits);
+    size_t L_size = (PSA_BITS_TO_BYTES(key_bits) * 2) + 1; // Uncompressed point
+
+    if (w0_size + L_size != data_length) {
+        return PSA_ERROR_INVALID_ARGUMENT;
+    }
+
+    psa_key_attributes_t w0_attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&w0_attributes, PSA_KEY_TYPE_ECC_KEY_PAIR(family));
+    psa_set_key_bits(&w0_attributes, key_bits);
+
+    status = mbedtls_psa_ecp_import_key(&w0_attributes,
+                                        data, w0_size,
+                                        key_buffer, key_buffer_size,
+                                        key_buffer_length, bits);
+    if (status != PSA_SUCCESS) {
+        return status;
+    }
+
+    psa_key_attributes_t L_attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&L_attributes, PSA_KEY_TYPE_ECC_PUBLIC_KEY(family));
+    psa_set_key_bits(&L_attributes, key_bits);
+
+    status = mbedtls_psa_ecp_import_key(&L_attributes,
+                                        data + w0_size, L_size,
+                                        key_buffer + w0_size,
+                                        key_buffer_size - w0_size,
+                                        key_buffer_length, bits);
+    if (status != PSA_SUCCESS) {
+        return status;
+    }
+
+    return PSA_SUCCESS;
+}
+
+psa_status_t mbedtls_psa_spake2p_import_key(
+    const psa_key_attributes_t *attributes,
+    const uint8_t *data, size_t data_length,
+    uint8_t *key_buffer, size_t key_buffer_size,
+    size_t *key_buffer_length, size_t *bits)
+{
+    psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
+
+    psa_algorithm_t alg = psa_get_key_algorithm(attributes);
+
+    if (!PSA_ALG_IS_SPAKE2P(alg)) {
+        return PSA_ERROR_INVALID_ARGUMENT;
+    }
+
+    psa_key_type_t key_type = psa_get_key_type(attributes);
+    psa_key_bits_t key_bits = psa_get_key_bits(attributes);
+
+#ifdef MBEDTLS_PSA_BUILTIN_KEY_TYPE_SPAKE2P_PUBLIC_KEY
+    if(PSA_KEY_TYPE_IS_SPAKE2P_PUBLIC_KEY(key_type)){
+        status = mbedtls_psa_spake2p_import_public_key(key_type, key_bits, data, data_length, &key_buffer, key_buffer_size, &key_buffer_length, &bits);
+    } else 
+#endif // MBEDTLS_PSA_BUILTIN_KEY_TYPE_SPAKE2P_PUBLIC_KEY
+    {
+        (void) key_bits;
+        return PSA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (status != PSA_SUCCESS) {
+        *key_buffer_length = 0;
+        *bits = 0;
+        return status;
+    }
+    return PSA_SUCCESS;
+}
+
+
 #endif /* MBEDTLS_PSA_BUILTIN_PAKE */
 
 #endif /* MBEDTLS_PSA_CRYPTO_C */
