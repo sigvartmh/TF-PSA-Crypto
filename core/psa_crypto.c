@@ -105,9 +105,9 @@ typedef enum {
 #define PSA_CRYPTO_SUBSYSTEM_TRANSACTION_INITIALIZED        0x04
 
 #define PSA_CRYPTO_SUBSYSTEM_ALL_INITIALISED                ( \
-        PSA_CRYPTO_SUBSYSTEM_DRIVER_WRAPPERS_INITIALIZED | \
-        PSA_CRYPTO_SUBSYSTEM_KEY_SLOTS_INITIALIZED | \
-        PSA_CRYPTO_SUBSYSTEM_TRANSACTION_INITIALIZED)
+            PSA_CRYPTO_SUBSYSTEM_DRIVER_WRAPPERS_INITIALIZED | \
+            PSA_CRYPTO_SUBSYSTEM_KEY_SLOTS_INITIALIZED | \
+            PSA_CRYPTO_SUBSYSTEM_TRANSACTION_INITIALIZED)
 
 typedef struct {
     uint8_t initialized;
@@ -184,8 +184,8 @@ int psa_can_do_hash(psa_algorithm_t hash_alg)
 }
 
 #define GUARD_MODULE_INITIALIZED        \
-    if (psa_get_initialized() == 0)     \
-    return PSA_ERROR_BAD_STATE;
+        if (psa_get_initialized() == 0) {     \
+            return PSA_ERROR_BAD_STATE; }
 
 #if !defined(MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS)
 
@@ -201,8 +201,8 @@ int psa_can_do_hash(psa_algorithm_t hash_alg)
  * - input_copy_name is a name that is unused in the current scope
  */
 #define LOCAL_INPUT_DECLARE(input, input_copy_name) \
-    psa_crypto_local_input_t LOCAL_INPUT_COPY_OF_##input = PSA_CRYPTO_LOCAL_INPUT_INIT; \
-    const uint8_t *input_copy_name = NULL;
+        psa_crypto_local_input_t LOCAL_INPUT_COPY_OF_##input = PSA_CRYPTO_LOCAL_INPUT_INIT; \
+        const uint8_t *input_copy_name = NULL;
 
 /* Allocate a copy of the buffer input and set the pointer input_copy to
  * point to the start of the copy.
@@ -214,12 +214,12 @@ int psa_can_do_hash(psa_algorithm_t hash_alg)
  * - LOCAL_INPUT_DECLARE(input, input_copy) has previously been called
  */
 #define LOCAL_INPUT_ALLOC(input, length, input_copy) \
-    status = psa_crypto_local_input_alloc(input, length, \
-                                          &LOCAL_INPUT_COPY_OF_##input); \
-    if (status != PSA_SUCCESS) { \
-        goto exit; \
-    } \
-    input_copy = LOCAL_INPUT_COPY_OF_##input.buffer;
+        status = psa_crypto_local_input_alloc(input, length, \
+                                              &LOCAL_INPUT_COPY_OF_##input); \
+        if (status != PSA_SUCCESS) { \
+            goto exit; \
+        } \
+        input_copy = LOCAL_INPUT_COPY_OF_##input.buffer;
 
 /* Free the local input copy allocated previously by LOCAL_INPUT_ALLOC()
  *
@@ -228,8 +228,8 @@ int psa_can_do_hash(psa_algorithm_t hash_alg)
  * - input is the name of the original buffer that was copied
  */
 #define LOCAL_INPUT_FREE(input, input_copy) \
-    input_copy = NULL; \
-    psa_crypto_local_input_free(&LOCAL_INPUT_COPY_OF_##input);
+        input_copy = NULL; \
+        psa_crypto_local_input_free(&LOCAL_INPUT_COPY_OF_##input);
 
 /* Declare a local copy of an output buffer and a variable that will be used
  * to store a pointer to the start of the buffer.
@@ -243,8 +243,8 @@ int psa_can_do_hash(psa_algorithm_t hash_alg)
  * - output_copy_name is a name that is unused in the current scope
  */
 #define LOCAL_OUTPUT_DECLARE(output, output_copy_name) \
-    psa_crypto_local_output_t LOCAL_OUTPUT_COPY_OF_##output = PSA_CRYPTO_LOCAL_OUTPUT_INIT; \
-    uint8_t *output_copy_name = NULL;
+        psa_crypto_local_output_t LOCAL_OUTPUT_COPY_OF_##output = PSA_CRYPTO_LOCAL_OUTPUT_INIT; \
+        uint8_t *output_copy_name = NULL;
 
 /* Allocate a copy of the buffer output and set the pointer output_copy to
  * point to the start of the copy.
@@ -256,12 +256,12 @@ int psa_can_do_hash(psa_algorithm_t hash_alg)
  * - LOCAL_OUTPUT_DECLARE(output, output_copy) has previously been called
  */
 #define LOCAL_OUTPUT_ALLOC(output, length, output_copy) \
-    status = psa_crypto_local_output_alloc(output, length, \
-                                           &LOCAL_OUTPUT_COPY_OF_##output); \
-    if (status != PSA_SUCCESS) { \
-        goto exit; \
-    } \
-    output_copy = LOCAL_OUTPUT_COPY_OF_##output.buffer;
+        status = psa_crypto_local_output_alloc(output, length, \
+                                               &LOCAL_OUTPUT_COPY_OF_##output); \
+        if (status != PSA_SUCCESS) { \
+            goto exit; \
+        } \
+        output_copy = LOCAL_OUTPUT_COPY_OF_##output.buffer;
 
 /* Free the local output copy allocated previously by LOCAL_OUTPUT_ALLOC()
  * after first copying back its contents to the original buffer.
@@ -272,30 +272,30 @@ int psa_can_do_hash(psa_algorithm_t hash_alg)
  * - output is the name of the original buffer that was copied
  */
 #define LOCAL_OUTPUT_FREE(output, output_copy) \
-    output_copy = NULL; \
-    do { \
-        psa_status_t local_output_status; \
-        local_output_status = psa_crypto_local_output_free(&LOCAL_OUTPUT_COPY_OF_##output); \
-        if (local_output_status != PSA_SUCCESS) { \
-            /* Since this error case is an internal error, it's more serious than \
-             * any existing error code and so it's fine to overwrite the existing \
-             * status. */ \
-            status = local_output_status; \
-        } \
-    } while (0)
+        output_copy = NULL; \
+        do { \
+            psa_status_t local_output_status; \
+            local_output_status = psa_crypto_local_output_free(&LOCAL_OUTPUT_COPY_OF_##output); \
+            if (local_output_status != PSA_SUCCESS) { \
+                /* Since this error case is an internal error, it's more serious than \
+                 * any existing error code and so it's fine to overwrite the existing \
+                 * status. */\
+                status = local_output_status; \
+            } \
+        } while (0)
 #else /* !MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS */
 #define LOCAL_INPUT_DECLARE(input, input_copy_name) \
-    const uint8_t *input_copy_name = NULL;
+        const uint8_t *input_copy_name = NULL;
 #define LOCAL_INPUT_ALLOC(input, length, input_copy) \
-    input_copy = input;
+        input_copy = input;
 #define LOCAL_INPUT_FREE(input, input_copy) \
-    input_copy = NULL;
+        input_copy = NULL;
 #define LOCAL_OUTPUT_DECLARE(output, output_copy_name) \
-    uint8_t *output_copy_name = NULL;
+        uint8_t *output_copy_name = NULL;
 #define LOCAL_OUTPUT_ALLOC(output, length, output_copy) \
-    output_copy = output;
+        output_copy = output;
 #define LOCAL_OUTPUT_FREE(output, output_copy) \
-    output_copy = NULL;
+        output_copy = NULL;
 #endif /* !MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS */
 
 
@@ -346,7 +346,7 @@ psa_status_t mbedtls_to_psa_error(int ret)
      * root cause better, so dispatch on that preferably. */
     int low_level_ret = -(-ret & 0x007f);
     switch (low_level_ret != 0 ? low_level_ret : ret) {
-        case 0:
+        case 0 :
             return PSA_SUCCESS;
 
 #if defined(MBEDTLS_AES_C)
@@ -1355,7 +1355,8 @@ psa_status_t psa_export_key_internal(
     if (key_type_is_raw_bytes(type) ||
         PSA_KEY_TYPE_IS_RSA(type)   ||
         PSA_KEY_TYPE_IS_ECC(type)   ||
-        PSA_KEY_TYPE_IS_DH(type)) {
+        PSA_KEY_TYPE_IS_DH(type)    ||
+        PSA_KEY_TYPE_IS_SPAKE2P(type)) {
         return psa_export_key_buffer_internal(
             key_buffer, key_buffer_size,
             data, data_size, data_length);
@@ -1427,7 +1428,7 @@ psa_status_t psa_export_public_key_internal(
 
     if (PSA_KEY_TYPE_IS_PUBLIC_KEY(type) &&
         (PSA_KEY_TYPE_IS_RSA(type) || PSA_KEY_TYPE_IS_ECC(type) ||
-         PSA_KEY_TYPE_IS_DH(type))) {
+         PSA_KEY_TYPE_IS_DH(type) || PSA_KEY_TYPE_IS_SPAKE2P(type))) {
         /* Exporting public -> public */
         return psa_export_key_buffer_internal(
             key_buffer, key_buffer_size,
@@ -8435,8 +8436,8 @@ psa_status_t psa_generate_key_iop_abort(
 
 #if !defined(MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG)
 psa_status_t mbedtls_psa_crypto_configure_entropy_sources(
-    void (* entropy_init)(mbedtls_entropy_context *ctx),
-    void (* entropy_free)(mbedtls_entropy_context *ctx))
+    void (*entropy_init)(mbedtls_entropy_context *ctx),
+    void (*entropy_free)(mbedtls_entropy_context *ctx))
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
 
@@ -8520,7 +8521,8 @@ static psa_status_t mbedtls_psa_crypto_init_subsystem(mbedtls_psa_crypto_subsyst
         case PSA_CRYPTO_SUBSYSTEM_DRIVER_WRAPPERS:
 
 #if defined(MBEDTLS_THREADING_C)
-            PSA_THREADING_CHK_GOTO_EXIT(mbedtls_mutex_lock(&mbedtls_threading_psa_globaldata_mutex));
+            PSA_THREADING_CHK_GOTO_EXIT(mbedtls_mutex_lock(
+                                            &mbedtls_threading_psa_globaldata_mutex));
 #endif /* defined(MBEDTLS_THREADING_C) */
 
             if (!(global_data.initialized & PSA_CRYPTO_SUBSYSTEM_DRIVER_WRAPPERS_INITIALIZED)) {
@@ -8542,7 +8544,8 @@ static psa_status_t mbedtls_psa_crypto_init_subsystem(mbedtls_psa_crypto_subsyst
         case PSA_CRYPTO_SUBSYSTEM_KEY_SLOTS:
 
 #if defined(MBEDTLS_THREADING_C)
-            PSA_THREADING_CHK_GOTO_EXIT(mbedtls_mutex_lock(&mbedtls_threading_psa_globaldata_mutex));
+            PSA_THREADING_CHK_GOTO_EXIT(mbedtls_mutex_lock(
+                                            &mbedtls_threading_psa_globaldata_mutex));
 #endif /* defined(MBEDTLS_THREADING_C) */
 
             if (!(global_data.initialized & PSA_CRYPTO_SUBSYSTEM_KEY_SLOTS_INITIALIZED)) {
@@ -8562,7 +8565,8 @@ static psa_status_t mbedtls_psa_crypto_init_subsystem(mbedtls_psa_crypto_subsyst
         case PSA_CRYPTO_SUBSYSTEM_RNG:
 
 #if defined(MBEDTLS_THREADING_C)
-            PSA_THREADING_CHK_GOTO_EXIT(mbedtls_mutex_lock(&mbedtls_threading_psa_globaldata_mutex));
+            PSA_THREADING_CHK_GOTO_EXIT(mbedtls_mutex_lock(
+                                            &mbedtls_threading_psa_globaldata_mutex));
 #endif /* defined(MBEDTLS_THREADING_C) */
 
             driver_wrappers_initialized =
@@ -8609,7 +8613,8 @@ static psa_status_t mbedtls_psa_crypto_init_subsystem(mbedtls_psa_crypto_subsyst
         case PSA_CRYPTO_SUBSYSTEM_TRANSACTION:
 
 #if defined(MBEDTLS_THREADING_C)
-            PSA_THREADING_CHK_GOTO_EXIT(mbedtls_mutex_lock(&mbedtls_threading_psa_globaldata_mutex));
+            PSA_THREADING_CHK_GOTO_EXIT(mbedtls_mutex_lock(
+                                            &mbedtls_threading_psa_globaldata_mutex));
 #endif /* defined(MBEDTLS_THREADING_C) */
 
             if (!(global_data.initialized & PSA_CRYPTO_SUBSYSTEM_TRANSACTION_INITIALIZED)) {
