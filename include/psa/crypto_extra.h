@@ -624,6 +624,26 @@ psa_status_t mbedtls_psa_platform_get_builtin_key(
      PSA_ALG_IS_SPAKE2P_CMAC(alg) ||    \
      (alg) == PSA_ALG_SPAKE2P_MATTER)
 
+
+/**
+ * \brief Extract the elliptic curve family from a SPAKE2+ key type.
+ *
+ * This macro returns the curve family for a SPAKE2+ key type, as encoded in the key type value.
+ * If the key type is not a SPAKE2+ key type, the macro returns 0.
+ *
+ * \param type A key type value of type ::psa_key_type_t.
+ *
+ * \return The curve family encoded in the key type if it is a SPAKE2+ key type,
+ *         or 0 if the key type is not a SPAKE2+ key type.
+ *
+ * \note The returned value is of type ::psa_ecc_family_t and can be compared
+ *       to values such as ::PSA_ECC_FAMILY_SECP_R1, ::PSA_ECC_FAMILY_SECP_K1, etc.
+ */
+#define PSA_KEY_TYPE_SPAKE2P_GET_FAMILY(type) \
+    ((psa_ecc_family_t) (PSA_KEY_TYPE_IS_SPAKE2P(type) ? \
+                         ((type) & PSA_KEY_TYPE_ECC_CURVE_MASK) : \
+                         0))
+
 /** @} */
 
 /** \defgroup pake Password-authenticated key exchange (PAKE)
