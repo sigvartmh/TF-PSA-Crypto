@@ -108,4 +108,9 @@
 #error "PSA_WANT_ALG_TLS12_ECJPAKE_TO_PMS defined, but not all prerequisites"
 #endif
 
+#if defined(PSA_WANT_ALG_SPAKE2P_HMAC) && \
+    !defined(PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY)
+#error "PSA_WANT_ALG_SPAKE2P_HMAC defined, but not all prerequisites"
+#endif
+
 #endif /* TF_PSA_CRYPTO_CHECK_CRYPTO_CONFIG_H */
