@@ -488,6 +488,11 @@ exit:
     return ok;
 }
 #endif
+
+#if defined(PSA_WANT_ALG_SOME_SPAKE2P)
+static const uint8_t spake2p_client_id[] = { 'c', 'l', 'i', 'e', 'n', 't' };
+static const uint8_t spake2p_server_id[] = { 's', 'e', 'r', 'v', 'e', 'r' };
+#endif
 /* END_HEADER */
 
 /* BEGIN_DEPENDENCIES
@@ -3311,6 +3316,133 @@ exit:
     psa_destroy_key(shared_key_id);
     psa_pake_abort(&server);
     psa_pake_abort(&client);
+    PSA_DONE();
+}
+/* END_CASE */
+
+/* BEGIN_CASE depends_on:PSA_WANT_ALG_SOME_SPAKE2P:PSA_WANT_ECC_SECP_R1_256 */
+void spake2p_driver_hits(int alg_arg, data_t *client_key, data_t *server_key)
+{
+    psa_algorithm_t alg = alg_arg;
+    psa_pake_cipher_suite_t cs = psa_pake_cipher_suite_init();
+    psa_pake_operation_t client = psa_pake_operation_init();
+    psa_pake_operation_t server = psa_pake_operation_init();
+    psa_key_attributes_t ca = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_attributes_t sa = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_attributes_t ka = PSA_KEY_ATTRIBUTES_INIT;
+    mbedtls_svc_key_id_t ckey = MBEDTLS_SVC_KEY_ID_INIT;
+    mbedtls_svc_key_id_t skey = MBEDTLS_SVC_KEY_ID_INIT;
+    mbedtls_svc_key_id_t css = MBEDTLS_SVC_KEY_ID_INIT;
+    mbedtls_svc_key_id_t sss = MBEDTLS_SVC_KEY_ID_INIT;
+    uint8_t shareP[PSA_PAKE_OUTPUT_MAX_SIZE], shareV[PSA_PAKE_OUTPUT_MAX_SIZE];
+    uint8_t confirm[PSA_PAKE_OUTPUT_MAX_SIZE];
+    size_t lp = 0, lv = 0, lc = 0;
+
+    PSA_INIT();
+
+    psa_pake_cs_set_algorithm(&cs, alg);
+    psa_pake_cs_set_primitive(&cs, PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
+                                                      PSA_ECC_FAMILY_SECP_R1, 256));
+
+    psa_set_key_usage_flags(&ca, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&ca, alg);
+    psa_set_key_type(&ca, PSA_KEY_TYPE_SPAKE2P_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+    PSA_ASSERT(psa_import_key(&ca, client_key->x, client_key->len, &ckey));
+
+    psa_set_key_usage_flags(&sa, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&sa, alg);
+    psa_set_key_type(&sa, PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    PSA_ASSERT(psa_import_key(&sa, server_key->x, server_key->len, &skey));
+
+    PSA_ASSERT(psa_pake_setup(&client, ckey, &cs));
+    PSA_ASSERT(psa_pake_set_role(&client, PSA_PAKE_ROLE_CLIENT));
+    PSA_ASSERT(psa_pake_set_user(&client, spake2p_client_id, sizeof(spake2p_client_id)));
+    PSA_ASSERT(psa_pake_set_peer(&client, spake2p_server_id, sizeof(spake2p_server_id)));
+    PSA_ASSERT(psa_pake_setup(&server, skey, &cs));
+    PSA_ASSERT(psa_pake_set_role(&server, PSA_PAKE_ROLE_SERVER));
+    PSA_ASSERT(psa_pake_set_user(&server, spake2p_server_id, sizeof(spake2p_server_id)));
+    PSA_ASSERT(psa_pake_set_peer(&server, spake2p_client_id, sizeof(spake2p_client_id)));
+
+    /* Count only the driver entry points reached during the computation stage:
+     * psa_pake_setup() collects inputs in the core and does not call the
+     * driver; the driver pake_setup fires lazily on the first output/input. */
+    mbedtls_test_driver_pake_hooks = mbedtls_test_driver_pake_hooks_init();
+
+    PSA_ASSERT(psa_pake_output(&client, PSA_PAKE_STEP_KEY_SHARE, shareP, sizeof(shareP), &lp));
+    PSA_ASSERT(psa_pake_input(&server, PSA_PAKE_STEP_KEY_SHARE, shareP, lp));
+    PSA_ASSERT(psa_pake_output(&server, PSA_PAKE_STEP_KEY_SHARE, shareV, sizeof(shareV), &lv));
+    PSA_ASSERT(psa_pake_input(&client, PSA_PAKE_STEP_KEY_SHARE, shareV, lv));
+    PSA_ASSERT(psa_pake_output(&server, PSA_PAKE_STEP_CONFIRM, confirm, sizeof(confirm), &lc));
+    PSA_ASSERT(psa_pake_input(&client, PSA_PAKE_STEP_CONFIRM, confirm, lc));
+    PSA_ASSERT(psa_pake_output(&client, PSA_PAKE_STEP_CONFIRM, confirm, sizeof(confirm), &lc));
+    PSA_ASSERT(psa_pake_input(&server, PSA_PAKE_STEP_CONFIRM, confirm, lc));
+
+    /* The exchange must have been dispatched through the transparent driver:
+     * one lazy setup per operation, and one driver call per output/input. */
+    TEST_EQUAL(mbedtls_test_driver_pake_hooks.hits.setup, 2);
+    TEST_EQUAL(mbedtls_test_driver_pake_hooks.hits.output, 4);
+    TEST_EQUAL(mbedtls_test_driver_pake_hooks.hits.input, 4);
+
+    psa_set_key_usage_flags(&ka, PSA_KEY_USAGE_EXPORT);
+    psa_set_key_type(&ka, PSA_KEY_TYPE_DERIVE);
+    psa_set_key_algorithm(&ka, PSA_ALG_HKDF(PSA_ALG_SHA_256));
+    PSA_ASSERT(psa_pake_get_shared_key(&client, &ka, &css));
+    PSA_ASSERT(psa_pake_get_shared_key(&server, &ka, &sss));
+
+    /* get_shared_key routes through the driver's get_implicit_key. */
+    TEST_EQUAL(mbedtls_test_driver_pake_hooks.hits.implicit_key, 2);
+
+exit:
+    psa_destroy_key(ckey);
+    psa_destroy_key(skey);
+    psa_destroy_key(css);
+    psa_destroy_key(sss);
+    psa_pake_abort(&client);
+    psa_pake_abort(&server);
+    mbedtls_test_driver_pake_hooks = mbedtls_test_driver_pake_hooks_init();
+    PSA_DONE();
+}
+/* END_CASE */
+
+/* BEGIN_CASE depends_on:PSA_WANT_ALG_SPAKE2P_HMAC:PSA_WANT_ALG_SHA_256:PSA_WANT_ALG_HMAC:PSA_WANT_ECC_SECP_R1_256 */
+void spake2p_driver_forced_status(data_t *client_key)
+{
+    psa_algorithm_t alg = PSA_ALG_SPAKE2P_HMAC(PSA_ALG_SHA_256);
+    psa_pake_cipher_suite_t cs = psa_pake_cipher_suite_init();
+    psa_pake_operation_t client = psa_pake_operation_init();
+    psa_key_attributes_t ca = PSA_KEY_ATTRIBUTES_INIT;
+    mbedtls_svc_key_id_t ckey = MBEDTLS_SVC_KEY_ID_INIT;
+    uint8_t shareP[PSA_PAKE_OUTPUT_MAX_SIZE];
+    size_t lp = 0;
+
+    PSA_INIT();
+
+    psa_pake_cs_set_algorithm(&cs, alg);
+    psa_pake_cs_set_primitive(&cs, PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
+                                                      PSA_ECC_FAMILY_SECP_R1, 256));
+    psa_set_key_usage_flags(&ca, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&ca, alg);
+    psa_set_key_type(&ca, PSA_KEY_TYPE_SPAKE2P_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+    PSA_ASSERT(psa_import_key(&ca, client_key->x, client_key->len, &ckey));
+
+    PSA_ASSERT(psa_pake_setup(&client, ckey, &cs));
+    PSA_ASSERT(psa_pake_set_role(&client, PSA_PAKE_ROLE_CLIENT));
+    PSA_ASSERT(psa_pake_set_user(&client, spake2p_client_id, sizeof(spake2p_client_id)));
+    PSA_ASSERT(psa_pake_set_peer(&client, spake2p_server_id, sizeof(spake2p_server_id)));
+
+    /* Force the driver's setup to fail; the error must propagate. */
+    mbedtls_test_driver_pake_hooks = mbedtls_test_driver_pake_hooks_init();
+    mbedtls_test_driver_pake_hooks.forced_setup_status = PSA_ERROR_GENERIC_ERROR;
+
+    TEST_EQUAL(psa_pake_output(&client, PSA_PAKE_STEP_KEY_SHARE,
+                               shareP, sizeof(shareP), &lp),
+               PSA_ERROR_GENERIC_ERROR);
+    TEST_EQUAL(mbedtls_test_driver_pake_hooks.hits.setup, 1);
+
+exit:
+    psa_destroy_key(ckey);
+    psa_pake_abort(&client);
+    mbedtls_test_driver_pake_hooks = mbedtls_test_driver_pake_hooks_init();
     PSA_DONE();
 }
 /* END_CASE */
