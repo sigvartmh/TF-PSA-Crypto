@@ -677,9 +677,66 @@ exit:
     return ok;
 }
 
+/* Same as spake2p_setup_pair but with zero-length user and peer IDs (PSA 1.5 /
+ * Matter PASE style). */
+static int spake2p_setup_pair_empty_ids(psa_pake_operation_t *client,
+                                          psa_pake_operation_t *server,
+                                          psa_algorithm_t alg, uint32_t bits,
+                                          const data_t *client_key,
+                                          const data_t *server_key,
+                                          const uint8_t *context, size_t context_len)
+{
+    psa_pake_cipher_suite_t cs = psa_pake_cipher_suite_init();
+    psa_key_attributes_t ca = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_attributes_t sa = PSA_KEY_ATTRIBUTES_INIT;
+    mbedtls_svc_key_id_t ckey = MBEDTLS_SVC_KEY_ID_INIT;
+    mbedtls_svc_key_id_t skey = MBEDTLS_SVC_KEY_ID_INIT;
+    int ok = 0;
+
+    psa_pake_cs_set_algorithm(&cs, alg);
+    psa_pake_cs_set_primitive(&cs, PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
+                                                      PSA_ECC_FAMILY_SECP_R1, bits));
+
+    psa_set_key_usage_flags(&ca, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&ca, alg);
+    psa_set_key_type(&ca, PSA_KEY_TYPE_SPAKE2P_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+    PSA_ASSERT(psa_import_key(&ca, client_key->x, client_key->len, &ckey));
+
+    psa_set_key_usage_flags(&sa, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&sa, alg);
+    psa_set_key_type(&sa, PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    PSA_ASSERT(psa_import_key(&sa, server_key->x, server_key->len, &skey));
+
+    PSA_ASSERT(psa_pake_setup(client, ckey, &cs));
+    PSA_ASSERT(psa_pake_set_role(client, PSA_PAKE_ROLE_CLIENT));
+    PSA_ASSERT(psa_pake_set_user(client, NULL, 0));
+    PSA_ASSERT(psa_pake_set_peer(client, NULL, 0));
+
+    PSA_ASSERT(psa_pake_setup(server, skey, &cs));
+    PSA_ASSERT(psa_pake_set_role(server, PSA_PAKE_ROLE_SERVER));
+    PSA_ASSERT(psa_pake_set_user(server, NULL, 0));
+    PSA_ASSERT(psa_pake_set_peer(server, NULL, 0));
+
+    if (context_len != 0) {
+        PSA_ASSERT(psa_pake_set_context(client, context, context_len));
+        PSA_ASSERT(psa_pake_set_context(server, context, context_len));
+    }
+
+    ok = 1;
+exit:
+    psa_destroy_key(ckey);
+    psa_destroy_key(skey);
+    return ok;
+}
+
 /* Derive a SPAKE2+ key pair (w0 || w1) from an HKDF operation seeded with the
  * given IKM. Returns the new key id (with DERIVE | EXPORT usage). Only called
- * from a test case that depends on the required mechanisms being enabled. */
+ * from a test case that depends on the required mechanisms being enabled, so
+ * guard it on the same dependencies to avoid an unused-function warning. */
+#if defined(PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_DERIVE) && \
+    defined(PSA_WANT_ALG_HKDF) && defined(PSA_WANT_ALG_SPAKE2P_HMAC) && \
+    defined(PSA_WANT_ALG_SHA_256) && defined(PSA_WANT_ALG_HMAC) && \
+    defined(PSA_WANT_ECC_SECP_R1_256)
 static int spake2p_derive_key_pair(mbedtls_svc_key_id_t *key, uint32_t bits,
                                    const uint8_t *ikm, size_t ikm_len)
 {
@@ -719,6 +776,7 @@ exit:
     psa_destroy_key(ikm_key);
     return ok;
 }
+#endif /* SPAKE2+ key-pair derive dependencies */
 #endif /* PSA_WANT_ALG_SOME_SPAKE2P */
 /* END_HEADER */
 
@@ -1463,6 +1521,52 @@ void spake2p_rounds(int alg_arg, int bits_arg,
     TEST_ASSERT(spake2p_do_exchange(&server, &client) == 1);
 
     /* Both parties export the shared secret as raw key-derivation input. */
+    psa_set_key_usage_flags(&ka, PSA_KEY_USAGE_EXPORT);
+    psa_set_key_type(&ka, PSA_KEY_TYPE_DERIVE);
+    psa_set_key_algorithm(&ka, PSA_ALG_HKDF(PSA_ALG_SHA_256));
+
+    PSA_ASSERT(psa_pake_get_shared_key(&client, &ka, &client_ss));
+    PSA_ASSERT(psa_pake_get_shared_key(&server, &ka, &server_ss));
+
+    PSA_ASSERT(psa_export_key(client_ss, cbuf, sizeof(cbuf), &clen));
+    PSA_ASSERT(psa_export_key(server_ss, sbuf, sizeof(sbuf), &slen));
+
+    TEST_ASSERT(clen > 0);
+    TEST_MEMORY_COMPARE(cbuf, clen, sbuf, slen);
+
+exit:
+    psa_destroy_key(client_ss);
+    psa_destroy_key(server_ss);
+    psa_pake_abort(&client);
+    psa_pake_abort(&server);
+    PSA_DONE();
+}
+/* END_CASE */
+
+/* BEGIN_CASE depends_on:PSA_WANT_ALG_SOME_SPAKE2P */
+void spake2p_empty_identity_round(int alg_arg, int bits_arg,
+                                  data_t *client_key, data_t *server_key,
+                                  int use_context)
+{
+    psa_algorithm_t alg = alg_arg;
+    psa_pake_operation_t client = psa_pake_operation_init_short();
+    psa_pake_operation_t server = psa_pake_operation_init_short();
+    psa_key_attributes_t ka = PSA_KEY_ATTRIBUTES_INIT;
+    mbedtls_svc_key_id_t client_ss = MBEDTLS_SVC_KEY_ID_INIT;
+    mbedtls_svc_key_id_t server_ss = MBEDTLS_SVC_KEY_ID_INIT;
+    uint8_t cbuf[PSA_HASH_MAX_SIZE], sbuf[PSA_HASH_MAX_SIZE];
+    size_t clen = 0, slen = 0;
+    static const uint8_t context[] = { 'P', 'A', 'K', 'E', ' ', 'c', 't', 'x' };
+
+    PSA_INIT();
+
+    TEST_ASSERT(spake2p_setup_pair_empty_ids(&client, &server, alg, (uint32_t) bits_arg,
+                                             client_key, server_key,
+                                             use_context ? context : NULL,
+                                             use_context ? sizeof(context) : 0) == 1);
+
+    TEST_ASSERT(spake2p_do_exchange(&server, &client) == 1);
+
     psa_set_key_usage_flags(&ka, PSA_KEY_USAGE_EXPORT);
     psa_set_key_type(&ka, PSA_KEY_TYPE_DERIVE);
     psa_set_key_algorithm(&ka, PSA_ALG_HKDF(PSA_ALG_SHA_256));

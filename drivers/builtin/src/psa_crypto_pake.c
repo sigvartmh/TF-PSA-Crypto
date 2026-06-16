@@ -289,16 +289,20 @@ psa_status_t mbedtls_psa_pake_setup(mbedtls_psa_pake_operation_t *operation,
         goto error;
     }
 
-    user = mbedtls_calloc(1, user_len);
-    if (user == NULL) {
-        status = PSA_ERROR_INSUFFICIENT_MEMORY;
-        goto error;
+    if (user_len > 0) {
+        user = mbedtls_calloc(1, user_len);
+        if (user == NULL) {
+            status = PSA_ERROR_INSUFFICIENT_MEMORY;
+            goto error;
+        }
     }
 
-    peer = mbedtls_calloc(1, peer_len);
-    if (peer == NULL) {
-        status = PSA_ERROR_INSUFFICIENT_MEMORY;
-        goto error;
+    if (peer_len > 0) {
+        peer = mbedtls_calloc(1, peer_len);
+        if (peer == NULL) {
+            status = PSA_ERROR_INSUFFICIENT_MEMORY;
+            goto error;
+        }
     }
 
     status = psa_crypto_driver_pake_get_password(inputs, operation->password,
@@ -307,16 +311,24 @@ psa_status_t mbedtls_psa_pake_setup(mbedtls_psa_pake_operation_t *operation,
         goto error;
     }
 
-    status = psa_crypto_driver_pake_get_user(inputs, user,
-                                             user_len, &actual_user_len);
-    if (status != PSA_SUCCESS) {
-        goto error;
+    if (user_len > 0) {
+        status = psa_crypto_driver_pake_get_user(inputs, user,
+                                                 user_len, &actual_user_len);
+        if (status != PSA_SUCCESS) {
+            goto error;
+        }
+    } else {
+        actual_user_len = 0;
     }
 
-    status = psa_crypto_driver_pake_get_peer(inputs, peer,
-                                             peer_len, &actual_peer_len);
-    if (status != PSA_SUCCESS) {
-        goto error;
+    if (peer_len > 0) {
+        status = psa_crypto_driver_pake_get_peer(inputs, peer,
+                                                 peer_len, &actual_peer_len);
+        if (status != PSA_SUCCESS) {
+            goto error;
+        }
+    } else {
+        actual_peer_len = 0;
     }
 
     operation->password_len = actual_password_len;
