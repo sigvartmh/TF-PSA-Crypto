@@ -13,7 +13,7 @@ and the general driver guides
 
 The design goal is that crypto acceleration is pluggable *where it makes sense*:
 you can either (A) plug in a **complete SPAKE2+ driver** that an accelerator
-backs, or (B) accelerate the **EC primitives** the software path uses — and this
+backs, or (B) accelerate the **EC primitives** the software path uses, and this
 document is explicit about which of those the current architecture supports.
 
 ## TL;DR
@@ -25,7 +25,7 @@ document is explicit about which of those the current architecture supports.
 * **Not available today:** transparently offloading the *built-in* module's
   `mbedtls_ecp_mul`/`muladd` to an accelerator. There are no `MBEDTLS_ECP_ALT`
   hooks, and `p256-m`/PSA transparent **ECC** drivers operate at the
-  PSA-operation level — they do not intercept the built-in PAKE's EC math.
+  PSA-operation level; they do not intercept the built-in PAKE's EC math.
 * **One-time plumbing caveat:** the PAKE section of the driver-wrapper template
   is currently hand-written, so adding a *real* vendor PAKE driver also means
   editing that template (see [Step 3](#step-3-wire-the-dispatch)).
@@ -52,12 +52,12 @@ flowchart TD
 This is `psa_driver_wrapper_pake_setup` in the generated
 `core/psa_crypto_driver_wrappers.h`; the subsequent
 `pake_output`/`pake_input`/`pake_get_implicit_key`/`pake_abort` wrappers switch
-on `operation->id`. The dispatch is **algorithm-agnostic** — SPAKE2+ already
+on `operation->id`. The dispatch is **algorithm-agnostic**: SPAKE2+ already
 flows through it unchanged (the in-tree test driver proves this in
 `test_suite_psa_crypto_driver_wrappers`: `spake2p_driver_hits`).
 
 
-## Option A — a whole-operation transparent SPAKE2+ driver (recommended)
+## Option A: a whole-operation transparent SPAKE2+ driver (recommended)
 
 This is the spec-defined, supported path. The driver implements the five PAKE
 entry points; the accelerator is invoked *inside* them.
@@ -122,7 +122,7 @@ accessors (do **not** poke the struct):
 | `psa_crypto_driver_pake_get_cipher_suite` | algorithm (e.g. `PSA_ALG_SPAKE2P_HMAC(...)`), primitive type, family, bits |
 | `psa_crypto_driver_pake_get_password_len` / `_get_password` | the SPAKE2+ registration material: `w0\|\|w1` (Prover) or `w0\|\|L` (Verifier) |
 | `psa_crypto_driver_pake_get_user(_len)` / `_get_peer(_len)` | identities for the transcript |
-| `psa_crypto_driver_pake_get_context_len` / `_get_context` | the optional SPAKE2+ `Context` (length 0 is valid) — **SPAKE2+-specific** |
+| `psa_crypto_driver_pake_get_context_len` / `_get_context` | the optional SPAKE2+ `Context` (length 0 is valid), **SPAKE2+-specific** |
 
 Derive the role the same way the built-in driver does: the password length is
 `2·ceil(bits/8)` for the Prover (`w0\|\|w1`) and `3·ceil(bits/8)+1` for the
@@ -132,11 +132,11 @@ Verifier (`w0\|\|L`).
 
 Because dispatch is whole-operation, the driver owns the **entire** protocol:
 the per-curve `M`/`N` constants, ephemeral generation, `shareP`/`shareV`,
-`Z`/`V`, the transcript `TT`, the HKDF schedule and the confirmation MAC — see
+`Z`/`V`, the transcript `TT`, the HKDF schedule and the confirmation MAC (see
 [`architecture/spake2p-implementation.md`](architecture/spake2p-implementation.md)
-for the exact formulas. The accelerator is called only for the heavy/sensitive
+for the exact formulas). The accelerator is called only for the heavy/sensitive
 math (scalar multiplication, point addition, modular arithmetic). The protocol
-logic does **not** come for free from the built-in module — that is the cost of
+logic does **not** come for free from the built-in module; that is the cost of
 this approach.
 
 ```mermaid
@@ -169,7 +169,7 @@ points with a public-scalar add. If the accelerator's scalar-mult is
 constant-time, route the secret mults through it.
 
 
-## Option B — accelerate the EC primitives under the built-in (NOT available)
+## Option B: accelerate the EC primitives under the built-in (NOT available)
 
 It is tempting to keep the built-in SPAKE2+ protocol and only offload its
 `mbedtls_ecp_mul`/`mbedtls_ecp_muladd` calls. **This is not possible in
@@ -194,7 +194,7 @@ Consequences:
   **nothing** for the built-in PAKE math.
 * `p256-m` likewise does not change the built-in PAKE path.
 
-Enabling Option B would require **new** infrastructure — either an
+Enabling Option B would require **new** infrastructure: either an
 `MBEDTLS_ECP_ALT`-style replacement of `mbedtls_ecp_mul`/`muladd`, or a PSA-level
 "EC primitive" driver interface that `spake2p.c` (and `ecjpake.c`) route
 through. That is a general TF-PSA-Crypto enhancement, independent of SPAKE2+, and
@@ -204,7 +204,7 @@ accelerator for SPAKE2+.**
 
 ## Step-by-step: adding a transparent SPAKE2+ driver
 
-### Step 1 — describe the driver
+### Step 1: describe the driver
 
 Add a transparent driver JSON under `scripts/data_files/driver_jsons/` (schema:
 `driver_transparent_schema.json`), with a unique `"prefix"` and a PAKE capability
@@ -212,26 +212,26 @@ naming the SPAKE2+ algorithms/curves you accelerate, and register it in
 `driverlist.json`. See `mbedtls_test_transparent_driver.json` and
 `p256_transparent_driver.json` for the format.
 
-### Step 2 — implement the entry points
+### Step 2: implement the entry points
 
 Provide `<prefix>_transparent_pake_{setup,output,input,get_implicit_key,abort}`
 and your `<prefix>_transparent_pake_operation_t` context type, per
-[Option A](#option-a--a-whole-operation-transparent-spake2-driver-recommended).
+[Option A](#option-a-a-whole-operation-transparent-spake2-driver-recommended).
 Return `PSA_ERROR_NOT_SUPPORTED` from `pake_setup` for ciphersuites you do not
 handle so the core falls back to the built-in driver.
 
-### Step 3 — wire the dispatch
+### Step 3: wire the dispatch
 
 > **Caveat:** unlike most operations, the PAKE section of
 > `scripts/data_files/driver_templates/psa_crypto_driver_wrappers.h.jinja` is
-> **hand-written** — it is not yet generated from the JSON capabilities (PAKE
+> **hand-written** and is not yet generated from the JSON capabilities (PAKE
 > codegen migration is pending). So you must add your driver's calls to the PAKE
 > wrappers there, mirroring the existing `mbedtls_test_transparent_pake_*` /
 > `PSA_CRYPTO_DRIVER_TEST` blocks (try the transparent driver before the
 > `MBEDTLS_PSA_BUILTIN_PAKE` fallback). Once PAKE codegen lands this step becomes
 > automatic.
 
-### Step 4 — build and test
+### Step 4: build and test
 
 * Configure with your driver present (`PSA_CRYPTO_ACCELERATOR_DRIVER_PRESENT`)
   and, if you keep the built-in for unsupported ciphersuites, leave
@@ -239,10 +239,10 @@ handle so the core falls back to the built-in driver.
 * Validate against the RFC 9383 vectors and the round-trip / negative tests
   (`test_suite_psa_crypto_pake`, `test_suite_spake2p`), and the dispatch
   hit-count tests in `test_suite_psa_crypto_driver_wrappers`
-  (`spake2p_driver_hits`) — these confirm your driver, not the built-in, runs the
+  (`spake2p_driver_hits`). These confirm your driver, not the built-in, runs the
   exchange.
 
-### Step 5 — opaque keys (optional)
+### Step 5: opaque keys (optional)
 
 If the password key lives in a secure element, provide the `_opaque_` PAKE entry
 points instead; dispatch selects them by the key's lifetime/location.
@@ -252,6 +252,6 @@ points instead; dispatch selects them by the key's lifetime/location.
 
 | You have… | Use… | Status |
 |-----------|------|--------|
-| A full SPAKE2+ engine, or an EC/PK engine you drive from your own SPAKE2+ code | Transparent (or opaque) PAKE driver — Option A | Supported; dispatch wired (template edit needed) |
-| Only an EC primitive engine, want to keep the built-in protocol | EC-primitive offload — Option B | Not available; needs new pluggability layer |
-| A PSA ECC (ECDH/ECDSA) driver | — | Does not affect the built-in PAKE path |
+| A full SPAKE2+ engine, or an EC/PK engine you drive from your own SPAKE2+ code | Transparent (or opaque) PAKE driver (Option A) | Supported; dispatch wired (template edit needed) |
+| Only an EC primitive engine, want to keep the built-in protocol | EC-primitive offload (Option B) | Not available; needs new pluggability layer |
+| A PSA ECC (ECDH/ECDSA) driver | N/A | Does not affect the built-in PAKE path |
