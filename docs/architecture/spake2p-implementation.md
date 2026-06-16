@@ -24,7 +24,7 @@ covers how to offload SPAKE2+ to a hardware accelerator.
   (whole-operation transparent / opaque drivers) with the built-in software
   driver as the fallback.
 * Out of scope: offline registration (deriving `w0`/`w1`/`L` from a password
-  via a PBKDF — RFC 9383 §3.2). That is the application's responsibility; the
+  via a PBKDF per RFC 9383 §3.2). That is the application's responsibility; the
   PSA SPAKE2+ key *is* the already-derived material. Twisted-Edwards curves are
   also out of scope.
 
@@ -34,7 +34,7 @@ covers how to offload SPAKE2+ to a hardware accelerator.
 SPAKE2+ follows the same "core + PSA drivers" structure as the rest of
 TF-PSA-Crypto (see
 [`psa-crypto-implementation-structure.md`](psa-crypto-implementation-structure.md)).
-Software crypto is itself a PSA driver — the *built-in* driver — reached through
+Software crypto is itself a PSA driver, the *built-in* driver, reached through
 the auto-generated driver-wrapper dispatch layer.
 
 ```
@@ -86,7 +86,7 @@ the auto-generated driver-wrapper dispatch layer.
 |------|----------------|
 | `drivers/builtin/src/spake2p.c` / `…/private/spake2p.h` | Self-contained SPAKE2+ engine on `mbedtls_ecp_*`/`mbedtls_md`/CMAC: M/N tables, ephemeral generation, `shareP`/`shareV`, `Z`/`V`, transcript `TT`, HKDF schedule, MAC + constant-time compare, RFC-vector self-test. Knows nothing about PSA. |
 | `drivers/builtin/src/psa_crypto_pake.c` | Built-in PSA PAKE driver. `mbedtls_psa_pake_setup/output/input/get_implicit_key/abort`. Translates `psa_crypto_driver_pake_step_t` ⇄ SPAKE2+ messages, reads collected inputs via `psa_crypto_driver_pake_get_*`, derives the role from the password length. |
-| `drivers/builtin/include/mbedtls/private/crypto_builtin_composites.h` | `mbedtls_psa_pake_operation_t` — the built-in driver context union; holds the `mbedtls_spake2p_context` alongside the EC-JPAKE context. |
+| `drivers/builtin/include/mbedtls/private/crypto_builtin_composites.h` | `mbedtls_psa_pake_operation_t`, the built-in driver context union; holds the `mbedtls_spake2p_context` alongside the EC-JPAKE context. |
 | `core/psa_crypto.c` | PSA core: the PAKE state machine (`psa_pake_*`), the SPAKE2+ prologue/epilogue, `psa_spake2p_import_key`, `psa_spake2p_export_public_key`, and the `psa_crypto_driver_pake_get_context*` helpers. |
 | `include/psa/crypto_extra.h` | Public API surface: key types, algorithm IDs, `psa_spake2p_computation_stage_s`, the driver-inputs `context` field, `PSA_SPAKE2P_STEP_*`, and `PSA_PAKE_{OUTPUT,INPUT}_SIZE`. |
 | `include/psa/crypto_sizes.h` | `PSA_EXPORT_KEY_OUTPUT_SIZE` / `PSA_EXPORT_PUBLIC_KEY_OUTPUT_SIZE` for SPAKE2+ keys. |
@@ -102,7 +102,7 @@ RFC 9383 has two asymmetric roles. The PSA mapping is:
 | `PSA_PAKE_ROLE_CLIENT` | Prover | `PSA_KEY_TYPE_SPAKE2P_KEY_PAIR(family)` | `w0 \|\| w1` (two scalars) |
 | `PSA_PAKE_ROLE_SERVER` | Verifier | `PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY(family)` | `w0 \|\| L` (scalar + uncompressed point) |
 
-* **Key size = the curve bit size** (256/384/521), exactly like an ECC key — *not*
+* **Key size = the curve bit size** (256/384/521), exactly like an ECC key, *not*
   the serialized material length. The serialized lengths follow from it:
   * key pair: `2 · ceil(bits/8)` bytes;
   * public key: `3 · ceil(bits/8) + 1` bytes (a scalar plus an uncompressed point).
@@ -196,7 +196,7 @@ K_shared                = HKDF(salt=nil, K_main, "SharedKey")
 confirmP = MAC(K_confirmP, shareV)     confirmV = MAC(K_confirmV, shareP)
 ```
 
-HKDF is implemented inline (`spake2p_hkdf`) from `mbedtls_md_hmac` — there is no
+HKDF is implemented inline (`spake2p_hkdf`) from `mbedtls_md_hmac`; there is no
 standalone `mbedtls_hkdf` in this repository. `K_main = Hash(TT)`; for the HMAC
 profiles the confirmation key and tag length equal the hash length, for CMAC
 they are 16 bytes; `K_shared` is always the hash length.
@@ -270,8 +270,8 @@ MBEDTLS_SPAKE2P_C, MBEDTLS_ECP_C, MBEDTLS_BIGNUM_C, secp_r1 curves
 
 | Layer | Test |
 |-------|------|
-| Protocol module (RFC vectors) | `mbedtls_spake2p_self_test` — exact RFC 9383 P-256 HMAC & CMAC vectors, a random round-trip and a tampered-confirm rejection; registered via `tests/suites/test_suite_spake2p.{data,function}`. |
-| PSA operation | `spake2p_rounds` (HMAC/CMAC/Matter × P-256/384/521) and negatives — `spake2p_bad_confirm`, `spake2p_confirm_bad_length`, `spake2p_bad_key_share`, `spake2p_role_mismatch`, `spake2p_password_mismatch` — plus `spake2p_import_export` and `spake2p_size_macros`, in `test_suite_psa_crypto_pake`. |
+| Protocol module (RFC vectors) | `mbedtls_spake2p_self_test`: exact RFC 9383 P-256 HMAC & CMAC vectors, a random round-trip and a tampered-confirm rejection; registered via `tests/suites/test_suite_spake2p.{data,function}`. |
+| PSA operation | `spake2p_rounds` (HMAC/CMAC/Matter × P-256/384/521) and negatives (`spake2p_bad_confirm`, `spake2p_confirm_bad_length`, `spake2p_bad_key_share`, `spake2p_role_mismatch`, `spake2p_password_mismatch`), plus `spake2p_import_export` and `spake2p_size_macros`, in `test_suite_psa_crypto_pake`. |
 | Metadata | SPAKE2+ algorithm classification in `test_suite_psa_crypto_metadata`. |
 | Systematic generation | `not_supported`, `op_fail` and `storage_format` generated suites cover the SPAKE2+ key types. |
 | Driver dispatch | `spake2p_driver_hits` / `spake2p_driver_forced_status` in `test_suite_psa_crypto_driver_wrappers` (test-driver build) confirm dispatch through the transparent driver. |
