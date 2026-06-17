@@ -1,0 +1,578 @@
+# SPAKE2+ in TF-PSA-Crypto
+### RFC 9383 + the Matter (CHIP) P-256 profile, through the PSA PAKE API
+
+A walkthrough of the SPAKE2+ protocol, the maths behind it, *what* we added to
+TF-PSA-Crypto and *why*, and how each Mbed-TLS issue (#9343 to #9381) maps onto
+the architecture.
+
+Three tracks:
+- **Deep dive (D1 to D7):** the SPAKE2+ cast, maths and two-round flow.
+- **Architecture (A1 to A8):** one slide per changed component, ending in the
+  engine-to-flow-to-keys map.
+- **Issues:** one slide per upstream issue, linking back to the architecture.
+
+---
+
+## What is SPAKE2+ and why Matter needs it
+
+- **SPAKE2+** (RFC 9383) is an *augmented* PAKE: two parties agree a strong shared
+  key from a low-entropy password, and the **verifier stores only registration
+  material** (`w0`, `L`), never a value that lets it impersonate the prover.
+- **Matter (connectedhomeip)** uses SPAKE2+ as the core of **PASE** (Passcode
+  Authenticated Session Establishment) during commissioning: the commissioner
+  proves knowledge of the on-device passcode without revealing it, and both sides
+  derive a session key in the same step.
+- Matter pins a specific profile: **P-256**, **HMAC-SHA-256**, fixed `M`/`N`
+  points, and a **split key schedule** (`Ka || Ke`), a deliberate deviation from
+  RFC 9383 Section 3.4.
+- Goal: expose all of this through the **standard PSA PAKE API**, so applications
+  and hardware accelerators use one interface for EC-JPAKE and SPAKE2+ alike.
+
+---
+
+<!-- divider -->
+# Deep dive: the SPAKE2+ protocol
+
+The cast, the maths, and the two-round flow (D1 to D7).
+
+---
+
+## D1 - The cast: keys, scalars and constants
+
+| Symbol | Lives where | Meaning |
+|--------|-------------|---------|
+| `P` | curve generator (`grp`) | base point of P-256 |
+| `p` | curve order | scalars are reduced mod `p` |
+| `M`, `N` | per-curve constants | fixed SPAKE2+ points (RFC 9383 Section 4) |
+| `w0` | prover **and** verifier | shared password scalar |
+| `w1` | **prover** only | second password scalar |
+| `L = w1 * P` | **verifier** only | verifier's registration record |
+| `x` / `y` | prover / verifier, per session | fresh random ephemeral scalar |
+| `shareP = X`, `shareV = Y` | exchanged | public key shares |
+| `Z`, `V` | each side computes | shared secret points |
+
+- `w0`, `w1`, `L` are **long-term registration material** (from the password).
+- `x`, `y` are **ephemeral**: fresh per handshake, never reused.
+- The whole point of "augmented": the verifier holds `L = w1 * P`, never `w1`.
+
+---
+
+## D2 - Registration / setup maths (offline)
+
+SPAKE2+ keys are *derived from the password*, not random (RFC 9383 Section 3.2):
+
+```
+(w0s, w1s) = PBKDF2(password, salt, iterations)   # Matter: Crypto_PBKDF
+ w0 = w0s mod p
+ w1 = w1s mod p
+ L  = w1 * P                                       # P = curve generator
+```
+
+- **Prover** keeps `(w0, w1)`. PSA key type `PSA_KEY_TYPE_SPAKE2P_KEY_PAIR`,
+  exported as `w0 || w1`.
+- **Verifier** keeps `(w0, L)`. PSA key type `PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY`,
+  exported as `w0 || L`.
+- In TF-PSA-Crypto this is the PSA key material: import it (#9343), or derive it
+  in-place with `psa_key_derivation_output_key()` (registration, #9381).
+- `psa_export_public_key` on a key pair recomputes the verifier record:
+  `L = w1 * P` (`psa_spake2p_export_public_key`, which also checks `w1 * P == L`).
+
+---
+
+## D3 - Round 1 maths: the key shares
+
+Each side masks a fresh ephemeral with its password scalar and a fixed point:
+
+```
+ Prover  (random x):  shareP = X = x * P + w0 * M
+ Verifier(random y):  shareV = Y = y * P + w0 * N
+```
+
+- `M` is the prover's mask, `N` is the verifier's mask: this asymmetry is what
+  binds each share to a role.
+- `w0 * M` (and `w0 * N`) hide the ephemeral public point `x * P` so a passive
+  observer learns nothing about `x` or `w0`.
+- The two shares `X` and `Y` are exchanged on the wire (65 bytes each, SEC1
+  uncompressed on P-256).
+- Received shares are checked with `mbedtls_ecp_check_pubkey` (on curve, in range,
+  not the identity) before use (RFC 9383 Section 6).
+
+---
+
+## D4 - Round 2 maths: the shared points Z and V
+
+Each side unmasks the peer share, then reaches the **same** `Z` and `V`:
+
+```
+ Prover:    T = Y - w0 * N         Z = x * T          V = w1 * T
+ Verifier:  U = X - w0 * M         Z = y * U          V = y * L
+```
+
+Why both sides agree:
+
+```
+ Z:  prover   x * (Y - w0*N) = x * (y*P)         = x*y * P
+     verifier y * (X - w0*M) = y * (x*P)         = x*y * P     (same)
+
+ V:  prover   w1 * (Y - w0*N) = w1 * (y*P)        = w1*y * P
+     verifier y * L = y * (w1*P)                  = w1*y * P    (same)
+```
+
+- `Z` proves a fresh Diffie-Hellman; `V` ties the exchange to the password
+  (`w1`/`L`) so only a party that knows the password can produce it.
+- Secret scalars (`w0`, `w1`, `x`/`y`) go only through the constant-time
+  `mbedtls_ecp_mul`; the public-scalar combine uses `mbedtls_ecp_muladd`.
+- A computed `Z` or `V` equal to the identity aborts the exchange (defence in depth).
+
+---
+
+## D5 - The transcript TT and the key schedule
+
+Everything public and secret is folded into one hash (8-byte LE length prefixes):
+
+```
+ TT = lt(Context)||Context || lt(idProver)||idProver || lt(idVerifier)||idVerifier
+    || lt(M)||M || lt(N)||N || lt(shareP)||shareP || lt(shareV)||shareV
+    || lt(Z)||Z || lt(V)||V || lt(w0)||w0
+
+ RFC 9383 (HMAC / CMAC):           Matter (PSA_ALG_SPAKE2P_MATTER):
+ K_main = Hash(TT)                 Kae   = SHA256(TT)
+ KcP||KcV = HKDF(K_main,           Ka    = Kae[0..15]   Ke = Kae[16..31]
+                "ConfirmationKeys")KcA||KcB = HKDF(Ka, "ConfirmationKeys")
+ K_shared = HKDF(K_main,           (each confirm key 16 bytes)
+                "SharedKey")       shared secret = Ke    (no "SharedKey" HKDF)
+```
+
+- Both ciphersuites hash the **same** `TT`; only the derivation differs.
+- Matter splits the digest into `Ka || Ke` and uses `Ke` directly as the session
+  secret. This is the deliberate deviation, captured in the interop vector.
+- `Context` is optional: omitted entirely if the app never sets it; an explicit
+  zero-length context is still hashed as `lt(0) || nil`.
+
+---
+
+## D6 - Key confirmation
+
+Each side proves it derived the same keys by MAC-ing the *peer's* share:
+
+```
+ confirmP = MAC(K_confirmP, shareV)      # prover  -> verifier
+ confirmV = MAC(K_confirmV, shareP)      # verifier -> prover
+
+ verifier sends confirmV FIRST (RFC 9383 App. A.5)
+ prover verifies confirmV  BEFORE sending confirmP
+```
+
+- Matter MAC = HMAC-SHA-256 with the 16-byte `KcA`/`KcB` over the 65-byte
+  uncompressed peer share.
+- The compare is constant time (`mbedtls_ct_memcmp`); a mismatch yields
+  `PSA_ERROR_INVALID_SIGNATURE`.
+- The prover never reveals `confirmP` to an unauthenticated peer: verify first,
+  then emit.
+- Only after the peer MAC verifies is the session key released (the `confirmed`
+  gate, see A7).
+
+---
+
+## D7 - The two-round model in depth
+
+```
+ Client / Prover (w0,w1)                       Server / Verifier (w0,L)
+   |  setup + set_role + set_user/peer + set_context (both sides)            |
+   |                                                                         |
+ ==[ KEY_SHARE round ]====================================================== |
+   |  output(KEY_SHARE) = shareP = x*P + w0*M  ----------------------------> |
+   |  <----------------------------  output(KEY_SHARE) = shareV = y*P + w0*N |
+   |  input(KEY_SHARE) of peer share                  input(KEY_SHARE)       |
+   |  -> when BOTH shares present: compute Z,V -> TT -> K_main -> keys        |
+   |                                                                         |
+ ==[ CONFIRM round ]======================================================== |
+   |  <----------------------------  output(CONFIRM) = confirmV = MAC(KcV,X) |
+   |  input(CONFIRM): verify confirmV  (constant time)                       |
+   |  output(CONFIRM) = confirmP = MAC(KcP,Y)  ----------------------------> |
+   |                                   input(CONFIRM): verify confirmP       |
+   |                                                                         |
+ ==[ FINISHED ]============================================================= |
+   |  get_shared_key() = K_shared (RFC) or Ke (Matter)   <-- gated on confirm|
+```
+
+- Each round is exactly **one output and one input**, in either order; when both
+  are done, the round advances. State: `KEY_SHARE -> CONFIRM -> FINISHED`.
+- The key schedule is derived **lazily** the moment both shares exist, so a
+  `CONFIRM` before that is rejected with `BAD_STATE`.
+
+---
+
+<!-- divider -->
+# Architecture
+
+One slide per changed API component (A1 to A8).
+
+---
+
+## A1 - Layered overview
+
+```
+ Application
+   | psa_pake_setup / set_role / set_user / set_peer / set_context
+   | psa_pake_output / psa_pake_input / psa_pake_get_shared_key
+   v
+ PSA core - PAKE state machine .................... core/psa_crypto.c   [A3]
+   | psa_driver_wrapper_pake_*
+   v
+ Driver dispatch (generated) ........... core/psa_crypto_driver_wrappers.h
+   |                                  \
+   v (built-in fallback)               v (accelerator)
+ Built-in PSA PAKE driver ......... drivers/builtin/src/psa_crypto_pake.c [A4]
+   | mbedtls_spake2p_*
+   v
+ SPAKE2+ engine ........................ drivers/builtin/src/spake2p.c    [A5-A7]
+   | mbedtls_ecp_* / mbedtls_md / CMAC
+   v
+ Built-in primitives: ECP, MD, CMAC
+```
+
+- Same "core + PSA drivers" shape as the rest of TF-PSA-Crypto: software crypto is
+  itself a PSA driver (the *built-in* driver), reached through the generated
+  driver-wrapper dispatch.
+- An accelerator can replace the built-in driver wholesale via the spec-defined
+  PAKE driver interface (`docs/spake2p-accelerator-integration.md`).
+
+---
+
+## A2 - PSA public API surface
+
+`include/psa/crypto_extra.h`, `include/psa/crypto_sizes.h`:
+
+| Surface | Macro / type | Notes |
+|---------|--------------|-------|
+| Key types | `PSA_KEY_TYPE_SPAKE2P_KEY_PAIR(curve)` / `..._PUBLIC_KEY(curve)` | pair = prover (`w0\|w1`), public = verifier (`w0\|L`) |
+| Algorithms | `PSA_ALG_SPAKE2P_HMAC(hash)`, `..._CMAC(hash)`, `PSA_ALG_SPAKE2P_MATTER` | one alg id per MAC profile |
+| Steps | `PSA_SPAKE2P_STEP_KEY_SHARE`, `PSA_SPAKE2P_STEP_CONFIRM` | only two PSA steps |
+| Sizes | `PSA_EXPORT_KEY_OUTPUT_SIZE`, `PSA_PAKE_{OUTPUT,INPUT}_SIZE` | derived from curve bits |
+
+- **Key size = curve bit size** (256/384/521), like an ECC key, *not* the
+  serialized length. Serialized lengths follow: key pair `2*ceil(bits/8)`, public
+  key `3*ceil(bits/8)+1`.
+- Touched by issues: **#9343** (key types/sizes), **#9344** (set_context),
+  **#9347/#9370** (steps, sizes), **#9377/#9378** (alg ids).
+
+---
+
+## A3 - PSA core state machine
+
+`core/psa_crypto.c`:
+
+- Owns the PAKE operation FSM: validates stage/step ordering
+  (`psa_spake2p_prologue` / `psa_spake2p_epilogue`), collects inputs (password key,
+  user, peer, context), and drives `KEY_SHARE -> CONFIRM -> FINISHED` (D7).
+- `psa_pake_get_shared_key` requires `round == PSA_SPAKE2P_FINISHED`.
+- Also hosts the key-material entry points `psa_spake2p_import_key` /
+  `psa_spake2p_export_public_key` (validate curve points, check `w1 * P == L`).
+- Touched by issues: **#9343, #9344, #9347, #9370, #9381**.
+
+---
+
+## A4 - Built-in PSA PAKE driver
+
+`drivers/builtin/src/psa_crypto_pake.c`:
+
+- Bridges the per-step PSA interface to the message-oriented `mbedtls_spake2p_*`
+  engine API.
+- `mbedtls_psa_pake_setup`: reads `cipher_suite`, password, `user`, `peer`,
+  `context`; maps the PSA alg to `{HMAC,CMAC}` + hash and the family/bits to an
+  `mbedtls_ecp_group_id`; and **derives the role from the password length**
+  (`2*plen` => prover, `3*plen+1` => verifier).
+- `output`/`input` switch on the driver step
+  (`PSA_SPAKE2P_STEP_KEY_SHARE` / `..._CONFIRM`) to the matching engine call.
+- `get_implicit_key` -> `mbedtls_spake2p_get_shared_key`; `abort` ->
+  `mbedtls_spake2p_free`.
+- Context union in `crypto_builtin_composites.h`, gated by
+  `MBEDTLS_PSA_BUILTIN_SPAKE2P`.
+
+---
+
+## A5 - Engine I: setup and key material
+
+`drivers/builtin/src/spake2p.c`, context `mbedtls_spake2p_context`:
+
+- `mbedtls_spake2p_setup` parses the password into context fields:
+  `w0` (both roles), `w1` (prover), `L` (verifier); loads the per-curve `M`, `N`
+  (`spake2p_get_mn`, now curve-gated); fixes `grp`, `role`, `md_type`,
+  `mac_type`, `kdf_type`.
+- `w0`/`w1` are reduced mod the group order so the constant-time multiply is
+  well defined.
+- `set_user` / `set_peer` / `set_context` copy the identity and context strings
+  into `user` / `peer` / `context`.
+- Maps to deep-dive **D1, D2**.
+
+---
+
+## A6 - Engine II: the rounds
+
+- `mbedtls_spake2p_write_key_share`: draws the ephemeral `xy`, computes
+  `shareP`/`shareV` (D3), sets `have_shareP`/`have_shareV`, outputs the 65-byte
+  share.
+- `mbedtls_spake2p_read_key_share`: `mbedtls_ecp_check_pubkey` on the peer share,
+  stores it; when **both** shares are present, runs the derive path:
+  - computes `Z`, `V` (D4), assembles `TT`, `K_main = Hash(TT)`,
+  - splits/HKDFs into `K_confirmP`, `K_confirmV`, `K_shared` (D5),
+  - sets `keys_ready` (lazy derivation).
+- `mbedtls_spake2p_write_confirm` / `read_confirm`: the confirmation MACs (D6);
+  `read_confirm` sets `confirmed` on a constant-time match.
+- Maps to deep-dive **D3 to D6**.
+
+---
+
+## A7 - Engine III: shared key, gating and hygiene
+
+- `mbedtls_spake2p_get_shared_key`: returns `K_shared` (RFC) or `Ke` (Matter),
+  but **only if `confirmed` is set**. This independent flag, set inside
+  `read_confirm`, is what stops a caller taking a key when confirmation was
+  skipped or failed (#9370 hardening).
+- **Constant time:** secret scalars never touch `mbedtls_ecp_muladd`; group
+  membership checked on every received point; `Z`/`V` = identity aborts.
+- **Zeroization:** `TT`, `K_main`, HKDF and MAC scratch are wiped after derive;
+  `mbedtls_spake2p_free` zeroizes `K_confirmP/V`, `K_shared`, frees the identity
+  and context copies, and `mbedtls_mpi_free`s the scalars (`w0`, `w1`, `xy`).
+- Maps to deep-dive **D6, D7**.
+
+---
+
+## A8 - Engine-to-flow-to-keys map
+
+| Flow step (deep dive) | Engine function | Reads | Writes / sets |
+|-----------------------|-----------------|-------|---------------|
+| Setup (D2) | `mbedtls_spake2p_setup` | password, suite | `w0`,`w1`/`L`,`M`,`N`,`grp`,`role` |
+| Identities (D5) | `set_user`/`set_peer`/`set_context` | strings | `user`,`peer`,`context` |
+| Round 1 out (D3) | `write_key_share` | `w0`,`M`/`N`, RNG | `xy`,`shareP`/`shareV` |
+| Round 1 in (D3) | `read_key_share` | peer share | `shareP`/`shareV`, `have_*` |
+| Derive (D4,D5) | `read_key_share` (lazy) | shares,`w0`,`w1`/`L`,`xy` | `Z`,`V`,`TT`,`K_confirm*`,`K_shared`,`keys_ready` |
+| Round 2 out (D6) | `write_confirm` | `K_confirmP/V`, peer share | confirm MAC |
+| Round 2 in (D6) | `read_confirm` | `K_confirmP/V`, peer share | `confirmed` |
+| Finish (D7) | `get_shared_key` | `K_shared`/`Ke`, `confirmed` | session secret |
+
+---
+
+## A9 - Configuration and toggles
+
+```
+ PSA_WANT_ALG_SPAKE2P_HMAC / _CMAC / _MATTER   (include/psa/crypto_config.h)
+        | crypto_adjust_config_derived.h
+        v
+ PSA_WANT_ALG_SOME_SPAKE2P -> PSA_WANT_ALG_SOME_PAKE
+        | crypto_adjust_config_enable_builtins.h   (when not accelerated)
+        v
+ MBEDTLS_PSA_BUILTIN_PAKE, MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P_{HMAC,CMAC,MATTER},
+ MBEDTLS_SPAKE2P_C, MBEDTLS_ECP_C, MBEDTLS_BIGNUM_C, secp_r1 curves
+ (+ MBEDTLS_CMAC_C, MBEDTLS_AES_C for the CMAC profile)
+```
+
+- **Matter-minimal build (sisdk target):** define **only**
+  `PSA_WANT_ALG_SPAKE2P_MATTER` (+ key types) to compile just P-256 + HMAC-SHA-256.
+- CMAC is `#if MBEDTLS_CMAC_C`-gated; the P-256/384/521 `M`/`N` tables and
+  `spake2p_get_mn` arms are now curve-gated, so a P-256-only build drops the other
+  curves (review.md B1).
+- Touched by issues: **#9377 (CMAC), #9378 (Matter)**.
+
+---
+
+<!-- divider -->
+# Issues
+
+One slide per upstream issue: *what, why, where, how tested, link back.*
+
+---
+
+## #9343 - SPAKE2+ key pair import & export  (-> A2, A3, D2)
+
+- **What:** `PSA_KEY_TYPE_SPAKE2P_{KEY_PAIR,PUBLIC_KEY}(curve)`, import/export of
+  `w0|w1` (prover) and `w0|L` (verifier), and the export derivation `L = w1 * P`.
+- **Why:** SPAKE2+ keys are *registration material*, not ECC keys; the PSA key
+  store must hold and validate them before any protocol runs.
+- **Where:** `core/psa_crypto.c` (`psa_spake2p_import_key`,
+  `psa_spake2p_export_public_key`), `crypto_extra.h`, `crypto_sizes.h`.
+- **Tested:** `test_suite_psa_crypto.data` import/export + rejections
+  (bad point, `w1 * P != L`, incompatible policy).
+- **PR-C** - rides with the base protocol: the key-type config validation lives in
+  the same build-config commit, so #9343 is not independently buildable.
+
+---
+
+## #9344 - psa_pake_set_context()  (-> A2, A3, D5)
+
+- **What:** a PSA PAKE input that supplies the optional SPAKE2+ `Context` hashed
+  first in `TT`.
+- **Why:** Matter and RFC 9383 bind a protocol context into the transcript; the
+  PSA API had no way to pass it.
+- **Where:** `core/psa_crypto.c` (`psa_pake_set_context` + driver-inputs
+  `context`), `crypto_extra.h`.
+- **Tested:** `test_suite_psa_crypto_pake` set_context cases; with and without
+  context (zero-length vs omitted).
+- **PR-B** - small PSA API addition.
+
+---
+
+## #9347 - Setup & output key share  (-> A4, A5, A6, D3)
+
+- **What:** `mbedtls_spake2p_setup` + the KEY_SHARE round: prover emits
+  `shareP = x*P + w0*M`, verifier emits `shareV = y*P + w0*N`.
+- **Why:** first protocol message; establishes the ephemeral masked by the
+  password-derived point.
+- **Where:** `spake2p.c` (`mbedtls_spake2p_write_key_share`, `spake2p_get_mn`),
+  `psa_crypto_pake.c`, `core/psa_crypto.c`.
+- **Tested:** RFC 9383 P-256 vectors in `test_suite_spake2p`; PSA round-trip in
+  `test_suite_psa_crypto_pake`.
+- **PR-C** - commit closes #9347.
+
+---
+
+## #9349 - Verifier transcript hash  (-> A6, D4, D5)
+
+- **What:** the verifier's `TT` and `K_main = Hash(TT)` after `Z = y*U`, `V = y*L`.
+- **Why:** both sides must hash *identical* `TT`; the verifier's view fixes role
+  ordering (`idProver` first).
+- **Where:** `spake2p.c` derive path (verifier branch).
+- **Tested:** transcript intermediates vs RFC/Matter vectors.
+- **PR-C** - commit closes #9349.
+
+---
+
+## #9352 - Verifier confirmation  (-> A4, A6, D6)
+
+- **What:** verifier produces `confirmV = MAC(K_confirmV, shareP)` and sends it
+  first (RFC App. A.5).
+- **Why:** proves the verifier derived the same `K_main`; ordering drives the
+  one-round-trip flow.
+- **Where:** `spake2p.c` `mbedtls_spake2p_write_confirm`.
+- **Tested:** `spake2p_rounds` positive path; vector match on `confirmV`.
+- **PR-C** - commit closes #9352.
+
+---
+
+## #9355 - Verifier confirmation check  (-> A4, A6, D6)
+
+- **What:** verifier verifies the prover's `confirmP` (`mbedtls_ct_memcmp`).
+- **Why:** completes mutual authentication; a mismatch must be a constant-time,
+  hard failure.
+- **Where:** `spake2p.c` `mbedtls_spake2p_read_confirm` ->
+  `MBEDTLS_ERR_ECP_VERIFY_FAILED` -> `PSA_ERROR_INVALID_SIGNATURE`.
+- **Tested:** `spake2p_bad_confirm`, `spake2p_confirm_bad_length`.
+- **PR-C** - commit closes #9355.
+
+---
+
+## #9359 - Prover transcript hash  (-> A6, D4, D5)
+
+- **What:** the prover's `TT`/`K_main` after `Z = x*T`, `V = w1*T`
+  (`T = Y - w0*N`).
+- **Why:** the prover's symmetric half of #9349; same `TT`, from the prover's
+  secrets.
+- **Where:** `spake2p.c` derive path (prover branch).
+- **Tested:** prover intermediates vs vectors; full round-trip.
+- **PR-C** - commit closes #9359.
+
+---
+
+## #9367 - Prover confirmation check  (-> A6, D6)
+
+- **What:** prover verifies `confirmV` **before** sending `confirmP`.
+- **Why:** the prover must not reveal its confirmation to an unauthenticated peer.
+- **Where:** `spake2p.c` verify-then-emit ordering; driver step gating.
+- **Tested:** ordering negatives; tampered-`confirmV` rejection.
+- **PR-C** - commit closes #9367.
+
+---
+
+## #9370 - get_shared_key() + confirmation gate  (-> A3, A7, D7)
+
+- **What:** `mbedtls_spake2p_get_shared_key` returns `K_shared`/`Ke`, **gated on
+  the independent `confirmed` flag** set only after the peer MAC verifies.
+- **Why:** stops a caller taking a session key when confirmation was skipped or
+  failed.
+- **Where:** `spake2p.c` (`confirmed` gate + `get_shared_key`); core requires
+  `round == PSA_SPAKE2P_FINISHED`.
+- **Tested:** `spake2p_rounds` positive; negatives prove no key without confirm.
+- **PR-C** - commit closes #9370.
+
+---
+
+## #9377 - CMAC support  (-> A9, D5, D6)
+
+- **What:** the `PSA_ALG_SPAKE2P_CMAC(hash)` profile: AES-CMAC-128 confirmation,
+  16-byte keys/tags.
+- **Why:** RFC 9383 defines a CMAC ciphersuite alongside HMAC.
+- **Where:** `spake2p.c` CMAC paths, gated by `MBEDTLS_CMAC_C`; toggle
+  `PSA_WANT_ALG_SPAKE2P_CMAC`.
+- **Tested:** RFC CMAC vectors in `test_suite_spake2p`; PSA CMAC rounds.
+- **PR-C** - co-developed in the engine commit, so it lands with the base
+  protocol; cleanly excluded from a non-CMAC build.
+
+---
+
+## #9378 - Matter (CHIP) profile  (-> A9, D5)
+
+- **What:** `PSA_ALG_SPAKE2P_MATTER`: HMAC-SHA-256 pinned to P-256 with the Matter
+  key schedule, `Kae = SHA256(TT)`, split `Ka || Ke`, confirmation keys from
+  HKDF(`Ka`), **shared secret = `Ke`**.
+- **Why:** Matter deviates from RFC Section 3.4; interop with connectedhomeip
+  requires this exact schedule.
+- **Where:** `spake2p.c` Matter branch; vector at
+  `tests/data_files/spake2p_matter_p256_interop.txt`.
+- **Tested:** engine + PSA tests against the Matter interop vector.
+- **PR-E** - combined with registration; also carries the curve-gating toggle.
+
+---
+
+## #9381 - Registration (key-pair derive)  (-> A2, A3, D2)
+
+- **What:** `psa_key_derivation_output_key()` derives a SPAKE2+ key pair: `w0`,
+  `w1` from `scalar_len + 8` bytes each, reduced mod the order (RFC Section 3.2).
+  Enables `PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_DERIVE`.
+- **Why:** lets an app turn a passcode (via a PBKDF) into the SPAKE2+ key inside
+  PSA, instead of importing pre-derived material.
+- **Where:** `core/psa_crypto.c` derive path; `crypto_config.h`.
+- **Tested:** derive -> export -> round-trip; the derived pair authenticates.
+- **PR-E** - combined with the Matter profile.
+
+---
+
+## PR map: issues to self-contained, CI-passing units
+
+| PR | Closes | CI gate (all PASS) |
+|----|--------|---------|
+| **PR-B** | #9344 | PSA PAKE set_context suite |
+| **PR-C** | #9343 #9347 #9349 #9352 #9355 #9359 #9367 #9370 #9377 | full HMAC+CMAC P-256 round-trip + RFC vectors |
+| **PR-E** | #9378 #9381 | Matter interop vector + derive round-trip |
+| **PR-G** | cleanup | docs, scaffolding removal, curve-gating, .gitignore |
+
+- **Stacked, not independent:** BASE -> PR-B -> PR-C -> PR-E -> PR-G; set each PR's
+  GitHub base to the previous branch.
+- **Combined where co-developed:** key import/export (#9343) and CMAC (#9377) ride
+  in PR-C - neither builds apart from the base protocol (the config validation and
+  engine come together); Matter + registration share PR-E (one follow-up,
+  scaffolding removed). No artificial hunk-splitting.
+- Mechanized and CI-gated by `scripts/split_spake2p_prs.sh`; details in `review.md`.
+
+---
+
+<!-- divider -->
+## Takeaways
+
+- One PSA PAKE surface covers **RFC 9383** (HMAC + CMAC, P-256/384/521) **and the
+  Matter P-256 profile**, with an accelerator path for free.
+- The maths is small but exact: `Z` is a masked DH, `V` binds the password, and a
+  single transcript `TT` feeds the key schedule and the confirmation MACs.
+- The hard engineering is constant-time secret handling, group-membership checks,
+  transcript fidelity, and a confirmation-gated shared key.
+- For **sisdk/Matter** we ship **strictly P-256 + HMAC-SHA-256** via toggles; the
+  rest compiles out.
+- Upstreaming is sequenced as stacked PRs that each pass CI and close their issues.
+
+---
+
+<!-- close -->
+# Thank you
+### Questions?
+
+`review.md` . `Presentation.md` . `scripts/split_spake2p_prs.sh`

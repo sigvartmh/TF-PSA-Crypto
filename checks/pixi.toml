@@ -1,0 +1,30 @@
+[project]
+name = "tfpsa-checks"
+version = "0.1.0"
+description = "Locally runnable code-style (uncrustify 0.75.1) and ABI/API checks for TF-PSA-Crypto"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "linux-aarch64"]
+
+# Toolchain for the checks:
+#  - code-style: builds uncrustify 0.75.1 from source (conda-forge has no 0.75.1,
+#    and framework/scripts/code_style.py hard-requires exactly that version).
+#  - abi-check: abi-dumper + abi-compliance-checker are ELF/Linux-only and not on
+#    conda-forge; the abi-check task fetches them and runs only on Linux.
+[dependencies]
+python = ">=3.10"
+cmake = ">=3.20"
+make = "*"
+cxx-compiler = "*"
+git = "*"
+perl = "*"            # abi-dumper / abi-compliance-checker are perl (Linux)
+binutils = "*"        # readelf/objdump for abi-dumper (Linux/ELF)
+universal-ctags = "*" # ctags for abi-dumper
+
+[tasks]
+# Check C code style with uncrustify 0.75.1 (builds it on first run).
+# Default: only files changed since the upstream base (the SPAKE2+ work).
+# Pass files to check a subset:  pixi run code-style -- drivers/builtin/src/spake2p.c
+code-style = "bash code-style.sh"
+
+# ABI / API / storage compatibility vs the upstream base (Linux only).
+abi-check = "bash abi-check.sh"
