@@ -621,6 +621,40 @@ exit:
     psa_destroy_key(ckey);
     return ok;
 }
+
+/* Set up a SPAKE2+ Verifier (server) operation from the given public-key
+ * registration record (w0||L). Returns 1 on success, 0 on failure. */
+static int spake2p_setup_server(psa_pake_operation_t *server,
+                                psa_algorithm_t alg, uint32_t bits,
+                                const data_t *server_key)
+{
+    psa_pake_cipher_suite_t cs = psa_pake_cipher_suite_init();
+    psa_key_attributes_t sa = PSA_KEY_ATTRIBUTES_INIT;
+    mbedtls_svc_key_id_t skey = MBEDTLS_SVC_KEY_ID_INIT;
+    int ok = 0;
+
+    psa_pake_cs_set_algorithm(&cs, alg);
+    psa_pake_cs_set_primitive(&cs, PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
+                                                      PSA_ECC_FAMILY_SECP_R1, bits));
+
+    psa_set_key_usage_flags(&sa, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&sa, alg);
+    psa_set_key_type(&sa, PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    PSA_ASSERT(psa_import_key(&sa, server_key->x, server_key->len, &skey));
+
+    PSA_ASSERT(psa_pake_setup(server, skey, &cs));
+    PSA_ASSERT(psa_pake_set_role(server, PSA_PAKE_ROLE_SERVER));
+    /* The server's own identity is the Verifier, its peer is the Prover. */
+    PSA_ASSERT(psa_pake_set_user(server, spake2p_prover_server_id,
+                                 sizeof(spake2p_prover_server_id)));
+    PSA_ASSERT(psa_pake_set_peer(server, spake2p_prover_client_id,
+                                 sizeof(spake2p_prover_client_id)));
+
+    ok = 1;
+exit:
+    psa_destroy_key(skey);
+    return ok;
+}
 #endif /* PSA_WANT_ALG_SOME_SPAKE2P */
 /* END_HEADER */
 
@@ -1583,6 +1617,127 @@ exit:
     mbedtls_spake2p_test_injected_ephemeral_len = 0;
     psa_destroy_key(ckey);
     psa_pake_abort(&client);
+    PSA_DONE();
+}
+/* END_CASE */
+
+/* BEGIN_CASE depends_on:PSA_WANT_ALG_SOME_SPAKE2P */
+void spake2p_verifier_setup_role_mismatch(int alg_arg, int bits_arg,
+                                          data_t *server_key)
+{
+    /* A public key (Verifier material) must not be accepted for the client
+     * role. */
+    psa_algorithm_t alg = alg_arg;
+    psa_pake_cipher_suite_t cs = psa_pake_cipher_suite_init();
+    psa_pake_operation_t op = psa_pake_operation_init_short();
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    mbedtls_svc_key_id_t key = MBEDTLS_SVC_KEY_ID_INIT;
+
+    PSA_INIT();
+
+    psa_pake_cs_set_algorithm(&cs, alg);
+    psa_pake_cs_set_primitive(&cs, PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
+                                                      PSA_ECC_FAMILY_SECP_R1,
+                                                      (uint32_t) bits_arg));
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&attr, alg);
+    psa_set_key_type(&attr, PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    PSA_ASSERT(psa_import_key(&attr, server_key->x, server_key->len, &key));
+
+    PSA_ASSERT(psa_pake_setup(&op, key, &cs));
+    /* The server role must be accepted, the client role rejected. */
+    TEST_EQUAL(psa_pake_set_role(&op, PSA_PAKE_ROLE_CLIENT),
+               PSA_ERROR_INVALID_ARGUMENT);
+
+exit:
+    psa_destroy_key(key);
+    psa_pake_abort(&op);
+    PSA_DONE();
+}
+/* END_CASE */
+
+/* BEGIN_CASE depends_on:PSA_WANT_ALG_SOME_SPAKE2P */
+void spake2p_verifier_key_share_format(int alg_arg, int bits_arg,
+                                       int expected_len, data_t *server_key)
+{
+    /* psa_pake_output(KEY_SHARE) for the Verifier must emit an uncompressed
+     * SEC1 point of the curve's fixed length, consistent with
+     * PSA_PAKE_OUTPUT_SIZE(). */
+    psa_algorithm_t alg = alg_arg;
+    psa_pake_primitive_t prim = PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
+                                                   PSA_ECC_FAMILY_SECP_R1,
+                                                   (uint32_t) bits_arg);
+    psa_pake_operation_t server = psa_pake_operation_init_short();
+    uint8_t shareV[PSA_PAKE_OUTPUT_MAX_SIZE];
+    size_t lv = 0;
+
+    PSA_INIT();
+
+    TEST_EQUAL(PSA_PAKE_OUTPUT_SIZE(alg, prim, PSA_PAKE_STEP_KEY_SHARE),
+               (size_t) expected_len);
+
+    TEST_ASSERT(spake2p_setup_server(&server, alg, (uint32_t) bits_arg,
+                                     server_key) == 1);
+
+    PSA_ASSERT(psa_pake_output(&server, PSA_PAKE_STEP_KEY_SHARE,
+                               shareV, sizeof(shareV), &lv));
+    TEST_EQUAL(lv, (size_t) expected_len);
+    TEST_EQUAL(shareV[0], 0x04);
+
+exit:
+    psa_pake_abort(&server);
+    PSA_DONE();
+}
+/* END_CASE */
+
+/* BEGIN_CASE depends_on:PSA_WANT_ALG_SPAKE2P_MATTER:PSA_WANT_ALG_SHA_256:PSA_WANT_ECC_SECP_R1_256:MBEDTLS_TEST_HOOKS */
+void spake2p_verifier_key_share_psa_kat(data_t *context,
+                                        data_t *server_key,
+                                        data_t *y, data_t *exp_shareV)
+{
+    /* Reproduce the RFC 9383 P-256 HMAC Verifier share byte-for-byte through
+     * psa_pake_output() (via PSA_ALG_SPAKE2P_MATTER, the HMAC-SHA-256 P-256
+     * profile), with the published ephemeral y pinned via the
+     * MBEDTLS_TEST_HOOKS injection seam. This validates the server setup
+     * (w0||L public-key record) and the KEY_SHARE output plumbing. */
+    psa_pake_cipher_suite_t cs = psa_pake_cipher_suite_init();
+    psa_pake_operation_t server = psa_pake_operation_init_short();
+    psa_key_attributes_t sa = PSA_KEY_ATTRIBUTES_INIT;
+    mbedtls_svc_key_id_t skey = MBEDTLS_SVC_KEY_ID_INIT;
+    uint8_t shareV[PSA_PAKE_OUTPUT_MAX_SIZE];
+    size_t lv = 0;
+
+    PSA_INIT();
+
+    psa_pake_cs_set_algorithm(&cs, PSA_ALG_SPAKE2P_MATTER);
+    psa_pake_cs_set_primitive(&cs, PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
+                                                      PSA_ECC_FAMILY_SECP_R1, 256));
+
+    psa_set_key_usage_flags(&sa, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&sa, PSA_ALG_SPAKE2P_MATTER);
+    psa_set_key_type(&sa, PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    PSA_ASSERT(psa_import_key(&sa, server_key->x, server_key->len, &skey));
+
+    PSA_ASSERT(psa_pake_setup(&server, skey, &cs));
+    PSA_ASSERT(psa_pake_set_role(&server, PSA_PAKE_ROLE_SERVER));
+    PSA_ASSERT(psa_pake_set_user(&server, spake2p_prover_server_id,
+                                 sizeof(spake2p_prover_server_id)));
+    PSA_ASSERT(psa_pake_set_peer(&server, spake2p_prover_client_id,
+                                 sizeof(spake2p_prover_client_id)));
+    PSA_ASSERT(psa_pake_set_context(&server, context->x, context->len));
+
+    /* Server KEY_SHARE = shareV, with the published ephemeral y. */
+    mbedtls_spake2p_test_injected_ephemeral = y->x;
+    mbedtls_spake2p_test_injected_ephemeral_len = y->len;
+    PSA_ASSERT(psa_pake_output(&server, PSA_PAKE_STEP_KEY_SHARE,
+                               shareV, sizeof(shareV), &lv));
+    TEST_MEMORY_COMPARE(shareV, lv, exp_shareV->x, exp_shareV->len);
+
+exit:
+    mbedtls_spake2p_test_injected_ephemeral = NULL;
+    mbedtls_spake2p_test_injected_ephemeral_len = 0;
+    psa_destroy_key(skey);
+    psa_pake_abort(&server);
     PSA_DONE();
 }
 /* END_CASE */
