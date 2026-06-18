@@ -6598,6 +6598,88 @@ static psa_status_t psa_generate_derived_ecc_key_montgomery_helper(
 #endif /* MBEDTLS_PSA_BUILTIN_KEY_TYPE_ECC_KEY_PAIR_DERIVE */
 #endif /* PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_DERIVE */
 
+#if defined(PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_DERIVE)
+/* SPAKE2+ registration (RFC 9383 Section 3.2): derive the Prover key pair
+ * (w0, w1) from a key-derivation operation. For each scalar, draw
+ * ceil(bits/8) + 8 bytes from the operation, interpret as a big-endian integer
+ * and reduce it modulo the group order n; the extra 8 bytes (64 bits) keep the
+ * modular bias negligible. The derived key material is the canonical key-pair
+ * encoding w0 || w1, each ceil(bits/8) bytes big-endian.
+ *
+ * Allocates *data (the caller must zeroize and free it) and returns its length
+ * in *data_len.
+ */
+static psa_status_t psa_generate_derived_spake2p_key(
+    size_t bits, psa_ecc_family_t family,
+    psa_key_derivation_operation_t *operation,
+    uint8_t **data, size_t *data_len)
+{
+    psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
+    int ret = MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED;
+    mbedtls_ecp_group grp;
+    mbedtls_mpi k;
+    uint8_t draw[MBEDTLS_ECP_MAX_BYTES + 8];
+    size_t scalar_len = PSA_BITS_TO_BYTES(bits);
+    size_t draw_len = scalar_len + 8;
+    mbedtls_ecp_group_id grp_id;
+
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_mpi_init(&k);
+    *data = NULL;
+    *data_len = 0;
+
+    /* Only the short-Weierstrass secp_r1 curves are supported for SPAKE2+. */
+    if (family != PSA_ECC_FAMILY_SECP_R1) {
+        status = PSA_ERROR_NOT_SUPPORTED;
+        goto cleanup;
+    }
+    grp_id = mbedtls_ecc_group_from_psa(family, bits);
+    if (grp_id == MBEDTLS_ECP_DP_NONE) {
+        status = PSA_ERROR_NOT_SUPPORTED;
+        goto cleanup;
+    }
+    MBEDTLS_MPI_CHK(mbedtls_ecp_group_load(&grp, grp_id));
+    if (draw_len > sizeof(draw)) {
+        status = PSA_ERROR_NOT_SUPPORTED;
+        goto cleanup;
+    }
+
+    *data = mbedtls_calloc(1, 2 * scalar_len);
+    if (*data == NULL) {
+        status = PSA_ERROR_INSUFFICIENT_MEMORY;
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < 2; i++) {
+        status = psa_key_derivation_output_bytes(operation, draw, draw_len);
+        if (status != PSA_SUCCESS) {
+            goto cleanup;
+        }
+        /* w{0,1} = (big-endian draw) mod n. */
+        MBEDTLS_MPI_CHK(mbedtls_mpi_read_binary(&k, draw, draw_len));
+        MBEDTLS_MPI_CHK(mbedtls_mpi_mod_mpi(&k, &k, &grp.N));
+        MBEDTLS_MPI_CHK(mbedtls_mpi_write_binary(&k, *data + i * scalar_len,
+                                                 scalar_len));
+    }
+
+    *data_len = 2 * scalar_len;
+    status = PSA_SUCCESS;
+
+cleanup:
+    if (ret != 0 && ret != MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED) {
+        status = mbedtls_to_psa_error(ret);
+    }
+    if (status != PSA_SUCCESS && *data != NULL) {
+        mbedtls_zeroize_and_free(*data, 2 * scalar_len);
+        *data = NULL;
+    }
+    mbedtls_platform_zeroize(draw, sizeof(draw));
+    mbedtls_mpi_free(&k);
+    mbedtls_ecp_group_free(&grp);
+    return status;
+}
+#endif /* PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_DERIVE */
+
 static psa_status_t psa_generate_derived_key_internal(
     psa_key_slot_t *slot,
     size_t bits,
@@ -6632,6 +6714,16 @@ static psa_status_t psa_generate_derived_key_internal(
     } else
 #endif /* defined(PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_DERIVE) ||
           defined(MBEDTLS_PSA_BUILTIN_KEY_TYPE_ECC_KEY_PAIR_DERIVE) */
+#if defined(PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_DERIVE)
+    if (PSA_KEY_TYPE_IS_SPAKE2P_KEY_PAIR(slot->attr.type)) {
+        status = psa_generate_derived_spake2p_key(
+            bits, PSA_KEY_TYPE_SPAKE2P_GET_FAMILY(slot->attr.type),
+            operation, &data, &bytes);
+        if (status != PSA_SUCCESS) {
+            goto exit;
+        }
+    } else
+#endif /* PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_DERIVE */
     if (key_type_is_raw_bytes(slot->attr.type)) {
         if (bits % 8 != 0) {
             return PSA_ERROR_INVALID_ARGUMENT;
@@ -6650,6 +6742,10 @@ static psa_status_t psa_generate_derived_key_internal(
     }
 
     slot->attr.bits = (psa_key_bits_t) bits;
+
+    /* The serialized key material can be longer than ceil(bits/8) (e.g. a
+     * SPAKE2+ key pair is two scalars, w0 || w1); track the actual length. */
+    storage_size = bytes;
 
     if (psa_key_lifetime_is_external(slot->attr.lifetime)) {
         status = psa_driver_wrapper_get_key_buffer_size(&slot->attr,
@@ -8976,7 +9072,7 @@ psa_status_t psa_crypto_driver_pake_get_user_len(
     const psa_crypto_driver_pake_inputs_t *inputs,
     size_t *user_len)
 {
-    if (inputs->user_len == 0) {
+    if (!inputs->user_set) {
         return PSA_ERROR_BAD_STATE;
     }
 
@@ -8989,7 +9085,7 @@ psa_status_t psa_crypto_driver_pake_get_user(
     const psa_crypto_driver_pake_inputs_t *inputs,
     uint8_t *user_id, size_t user_id_size, size_t *user_id_len)
 {
-    if (inputs->user_len == 0) {
+    if (!inputs->user_set) {
         return PSA_ERROR_BAD_STATE;
     }
 
@@ -8997,7 +9093,9 @@ psa_status_t psa_crypto_driver_pake_get_user(
         return PSA_ERROR_BUFFER_TOO_SMALL;
     }
 
-    memcpy(user_id, inputs->user, inputs->user_len);
+    if (inputs->user_len > 0) {
+        memcpy(user_id, inputs->user, inputs->user_len);
+    }
     *user_id_len = inputs->user_len;
 
     return PSA_SUCCESS;
@@ -9007,7 +9105,7 @@ psa_status_t psa_crypto_driver_pake_get_peer_len(
     const psa_crypto_driver_pake_inputs_t *inputs,
     size_t *peer_len)
 {
-    if (inputs->peer_len == 0) {
+    if (!inputs->peer_set) {
         return PSA_ERROR_BAD_STATE;
     }
 
@@ -9020,7 +9118,7 @@ psa_status_t psa_crypto_driver_pake_get_peer(
     const psa_crypto_driver_pake_inputs_t *inputs,
     uint8_t *peer_id, size_t peer_id_size, size_t *peer_id_length)
 {
-    if (inputs->peer_len == 0) {
+    if (!inputs->peer_set) {
         return PSA_ERROR_BAD_STATE;
     }
 
@@ -9028,7 +9126,9 @@ psa_status_t psa_crypto_driver_pake_get_peer(
         return PSA_ERROR_BUFFER_TOO_SMALL;
     }
 
-    memcpy(peer_id, inputs->peer, inputs->peer_len);
+    if (inputs->peer_len > 0) {
+        memcpy(peer_id, inputs->peer, inputs->peer_len);
+    }
     *peer_id_length = inputs->peer_len;
 
     return PSA_SUCCESS;
@@ -9200,25 +9300,37 @@ psa_status_t psa_pake_set_user(
     }
 
     if (user_id_len == 0) {
+#if defined(PSA_WANT_ALG_SOME_SPAKE2P)
+        if (!PSA_ALG_IS_SPAKE2P(operation->alg)) {
+            status = PSA_ERROR_INVALID_ARGUMENT;
+            goto exit;
+        }
+#else
         status = PSA_ERROR_INVALID_ARGUMENT;
         goto exit;
+#endif
     }
 
-    if (operation->data.inputs.user_len != 0) {
+    if (operation->data.inputs.user_set) {
         status = PSA_ERROR_BAD_STATE;
         goto exit;
     }
 
-    operation->data.inputs.user = mbedtls_calloc(1, user_id_len);
-    if (operation->data.inputs.user == NULL) {
-        status = PSA_ERROR_INSUFFICIENT_MEMORY;
-        goto exit;
+    if (user_id_len > 0) {
+        operation->data.inputs.user = mbedtls_calloc(1, user_id_len);
+        if (operation->data.inputs.user == NULL) {
+            status = PSA_ERROR_INSUFFICIENT_MEMORY;
+            goto exit;
+        }
+
+        LOCAL_INPUT_ALLOC(user_id_external, user_id_len, user_id);
+
+        memcpy(operation->data.inputs.user, user_id, user_id_len);
+    } else {
+        operation->data.inputs.user = NULL;
     }
-
-    LOCAL_INPUT_ALLOC(user_id_external, user_id_len, user_id);
-
-    memcpy(operation->data.inputs.user, user_id, user_id_len);
     operation->data.inputs.user_len = user_id_len;
+    operation->data.inputs.user_set = 1;
 
     status = PSA_SUCCESS;
 
@@ -9244,25 +9356,37 @@ psa_status_t psa_pake_set_peer(
     }
 
     if (peer_id_len == 0) {
+#if defined(PSA_WANT_ALG_SOME_SPAKE2P)
+        if (!PSA_ALG_IS_SPAKE2P(operation->alg)) {
+            status = PSA_ERROR_INVALID_ARGUMENT;
+            goto exit;
+        }
+#else
         status = PSA_ERROR_INVALID_ARGUMENT;
         goto exit;
+#endif
     }
 
-    if (operation->data.inputs.peer_len != 0) {
+    if (operation->data.inputs.peer_set) {
         status = PSA_ERROR_BAD_STATE;
         goto exit;
     }
 
-    operation->data.inputs.peer = mbedtls_calloc(1, peer_id_len);
-    if (operation->data.inputs.peer == NULL) {
-        status = PSA_ERROR_INSUFFICIENT_MEMORY;
-        goto exit;
+    if (peer_id_len > 0) {
+        operation->data.inputs.peer = mbedtls_calloc(1, peer_id_len);
+        if (operation->data.inputs.peer == NULL) {
+            status = PSA_ERROR_INSUFFICIENT_MEMORY;
+            goto exit;
+        }
+
+        LOCAL_INPUT_ALLOC(peer_id_external, peer_id_len, peer_id);
+
+        memcpy(operation->data.inputs.peer, peer_id, peer_id_len);
+    } else {
+        operation->data.inputs.peer = NULL;
     }
-
-    LOCAL_INPUT_ALLOC(peer_id_external, peer_id_len, peer_id);
-
-    memcpy(operation->data.inputs.peer, peer_id, peer_id_len);
     operation->data.inputs.peer_len = peer_id_len;
+    operation->data.inputs.peer_set = 1;
 
     status = PSA_SUCCESS;
 
@@ -9422,12 +9546,19 @@ static psa_status_t psa_pake_complete_inputs(
         return PSA_ERROR_BAD_STATE;
     }
 
-    if (PSA_ALG_IS_JPAKE(operation->alg) ||
-        PSA_ALG_IS_SPAKE2P(operation->alg)) {
-        if (inputs.user_len == 0 || inputs.peer_len == 0) {
+    if (PSA_ALG_IS_JPAKE(operation->alg)) {
+        if (!inputs.user_set || !inputs.peer_set ||
+            inputs.user_len == 0 || inputs.peer_len == 0) {
             return PSA_ERROR_BAD_STATE;
         }
     }
+#if defined(PSA_WANT_ALG_SOME_SPAKE2P)
+    if (PSA_ALG_IS_SPAKE2P(operation->alg)) {
+        if (!inputs.user_set || !inputs.peer_set) {
+            return PSA_ERROR_BAD_STATE;
+        }
+    }
+#endif
 
     /* Clear driver context */
     mbedtls_platform_zeroize(&operation->data, sizeof(operation->data));
