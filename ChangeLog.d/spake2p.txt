@@ -1,0 +1,5 @@
+Features
+   * Add support for the SPAKE2+ password-authenticated key exchange
+     (RFC 9383) through the PSA PAKE API. The HMAC and CMAC cipher suites
+     are supported on the NIST P-256, P-384 and P-521 curves, as well as
+     the Matter (CHIP) SPAKE2+ variant on P-256.

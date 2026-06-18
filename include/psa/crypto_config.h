@@ -122,6 +122,7 @@
 #define PSA_WANT_KEY_TYPE_DH_PUBLIC_KEY         1
 #define PSA_WANT_KEY_TYPE_RAW_DATA              1
 #define PSA_WANT_KEY_TYPE_RSA_PUBLIC_KEY        1
+#define PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY    1
 
 /*
  * The following symbols extend and deprecate the legacy
@@ -147,6 +148,12 @@
 #define PSA_WANT_KEY_TYPE_DH_KEY_PAIR_EXPORT    1
 #define PSA_WANT_KEY_TYPE_DH_KEY_PAIR_GENERATE  1
 //#define PSA_WANT_KEY_TYPE_DH_KEY_PAIR_DERIVE    1 /* Not supported */
+
+#define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_BASIC      1
+#define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_IMPORT   1
+#define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_EXPORT   1
+// #define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_GENERATE 1 /* Not supported: SPAKE2+ keys are registration material derived from a password, not randomly generated */
+// #define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_DERIVE   1 /* Not supported */
 /** \} name SECTION Cryptographic mechanism selection (PSA API) */
 
 /**
