@@ -186,8 +186,8 @@ int psa_can_do_hash(psa_algorithm_t hash_alg)
 }
 
 #define GUARD_MODULE_INITIALIZED        \
-    if (psa_get_initialized() == 0) {     \
-        return PSA_ERROR_BAD_STATE; }
+    if (psa_get_initialized() == 0)     \
+    return PSA_ERROR_BAD_STATE;
 
 #if !defined(MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS)
 
@@ -8699,8 +8699,8 @@ psa_status_t psa_generate_key_iop_abort(
 
 #if !defined(MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG)
 psa_status_t mbedtls_psa_crypto_configure_entropy_sources(
-    void (*entropy_init)(mbedtls_entropy_context *ctx),
-    void (*entropy_free)(mbedtls_entropy_context *ctx))
+    void (* entropy_init)(mbedtls_entropy_context *ctx),
+    void (* entropy_free)(mbedtls_entropy_context *ctx))
 {
     psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
 
@@ -9645,17 +9645,17 @@ typedef struct {
     size_t w0_len;
     size_t L_len;
     mbedtls_ecp_group_id grp_id;
+    size_t bits;
 } psa_spake2p_curve_info_t;
 
 static const psa_spake2p_curve_info_t spake2p_supported_curves[] =
 {
-    { PSA_ECC_FAMILY_SECP_R1, 24, 49, MBEDTLS_ECP_DP_SECP192R1 },
-    { PSA_ECC_FAMILY_SECP_R1, 32, 65, MBEDTLS_ECP_DP_SECP256R1 },
-    { PSA_ECC_FAMILY_SECP_R1, 48, 97, MBEDTLS_ECP_DP_SECP384R1 },
-    { PSA_ECC_FAMILY_SECP_R1, 66, 133, MBEDTLS_ECP_DP_SECP521R1 },
+    { PSA_ECC_FAMILY_SECP_R1, 32, 65, MBEDTLS_ECP_DP_SECP256R1, 256 },
+    { PSA_ECC_FAMILY_SECP_R1, 48, 97, MBEDTLS_ECP_DP_SECP384R1, 384 },
+    { PSA_ECC_FAMILY_SECP_R1, 66, 133, MBEDTLS_ECP_DP_SECP521R1, 521 },
 
-    { PSA_ECC_FAMILY_TWISTED_EDWARDS, 32, 32, MBEDTLS_ECP_DP_CURVE25519 },
-    { PSA_ECC_FAMILY_TWISTED_EDWARDS, 56, 56, MBEDTLS_ECP_DP_CURVE448 },
+    { PSA_ECC_FAMILY_TWISTED_EDWARDS, 32, 32, MBEDTLS_ECP_DP_CURVE25519, 255 },
+    { PSA_ECC_FAMILY_TWISTED_EDWARDS, 56, 56, MBEDTLS_ECP_DP_CURVE448, 448 },
 
 };
 
@@ -9665,23 +9665,21 @@ static const psa_spake2p_curve_info_t *psa_spake2p_get_curve_from_data_length(
 {
     if (family == PSA_ECC_FAMILY_SECP_R1) {
         switch (data_length) {
-            case (24 + 49):
-                return &spake2p_supported_curves[0];
             case (32 + 65):
-                return &spake2p_supported_curves[1];
+                return &spake2p_supported_curves[0];
             case (48 + 97):
-                return &spake2p_supported_curves[2];
+                return &spake2p_supported_curves[1];
             case (66 + 133):
-                return &spake2p_supported_curves[3];
+                return &spake2p_supported_curves[2];
             default:
                 break;
         }
     } else if (family == PSA_ECC_FAMILY_TWISTED_EDWARDS) {
         switch (data_length) {
             case (32 + 32):
-                return &spake2p_supported_curves[4];
+                return &spake2p_supported_curves[3];
             case (56 + 56):
-                return &spake2p_supported_curves[5];
+                return &spake2p_supported_curves[4];
             default:
                 break;
         }
@@ -9734,7 +9732,7 @@ psa_status_t psa_spake2p_import_key(
     switch (family) {
         case PSA_ECC_FAMILY_SECP_R1:
         // Fallthrough intended
-        case PSA_ECC_FAMILY_TWISTED_EDWARDS:
+        case PSA_ECC_FAMILY_TWISTED_EDWARDS: {
             mbedtls_ecp_group grp;
             mbedtls_ecp_point pt;
 
@@ -9766,6 +9764,7 @@ exit:
             mbedtls_ecp_point_free(&pt);
             mbedtls_ecp_group_free(&grp);
             break;
+        }
         default:
             return PSA_ERROR_INVALID_ARGUMENT;
     }
@@ -9778,7 +9777,7 @@ exit:
 
     memcpy(key_buffer, data, data_length);
     *key_buffer_length = data_length;
-    *bits = data_length * 8;
+    *bits = spake2_curve_info->bits;
 
     return PSA_SUCCESS;
 }
