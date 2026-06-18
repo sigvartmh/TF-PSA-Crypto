@@ -59,6 +59,9 @@
 #define PSA_WANT_ALG_FFDH                       1
 #define PSA_WANT_ALG_ECDSA                      1
 #define PSA_WANT_ALG_JPAKE                      1
+#define PSA_WANT_ALG_SPAKE2P_HMAC               1
+#define PSA_WANT_ALG_SPAKE2P_CMAC               1
+#define PSA_WANT_ALG_SPAKE2P_MATTER             1
 #define PSA_WANT_ALG_GCM                        1
 #define PSA_WANT_ALG_HKDF                       1
 #define PSA_WANT_ALG_HKDF_EXTRACT               1
@@ -119,6 +122,7 @@
 #define PSA_WANT_KEY_TYPE_DH_PUBLIC_KEY         1
 #define PSA_WANT_KEY_TYPE_RAW_DATA              1
 #define PSA_WANT_KEY_TYPE_RSA_PUBLIC_KEY        1
+#define PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY    1
 
 /*
  * The following symbols extend and deprecate the legacy
@@ -144,6 +148,12 @@
 #define PSA_WANT_KEY_TYPE_DH_KEY_PAIR_EXPORT    1
 #define PSA_WANT_KEY_TYPE_DH_KEY_PAIR_GENERATE  1
 //#define PSA_WANT_KEY_TYPE_DH_KEY_PAIR_DERIVE    1 /* Not supported */
+
+#define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_BASIC      1
+#define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_IMPORT   1
+#define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_EXPORT   1
+//#define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_GENERATE 1 /* Not supported: SPAKE2+ keys are registration material derived from a password, not randomly generated */
+#define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_DERIVE   1
 /** \} name SECTION Cryptographic mechanism selection (PSA API) */
 
 /**
@@ -737,7 +747,7 @@
  *
  * Uncomment to enable invasive tests.
  */
-//#define MBEDTLS_TEST_HOOKS
+#define MBEDTLS_TEST_HOOKS
 
 /**
  * \def TF_PSA_CRYPTO_VERSION

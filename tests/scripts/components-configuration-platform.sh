@@ -143,6 +143,20 @@ component_tf_psa_crypto_test_have_int32_cmake_new_bignum () {
     make test
 }
 
+component_tf_psa_crypto_test_spake2p_hooks () {
+    msg "build: default config + MBEDTLS_TEST_HOOKS, SPAKE2+ (ASan build)"
+    # MBEDTLS_TEST_HOOKS exposes the SPAKE2+ ephemeral-injection hook used by
+    # the deterministic Matter known-answer test (spake2p_psa_matter_kat).
+    scripts/config.py set MBEDTLS_TEST_HOOKS
+    cd $OUT_OF_SOURCE_DIR
+    cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE:String=Asan "$TF_PSA_CRYPTO_ROOT_DIR"
+    make
+
+    # Run the SPAKE2+ suites, including the hooks-gated Matter known-answer test.
+    msg "test: SPAKE2+ with MBEDTLS_TEST_HOOKS (ASan build)"
+    ctest -R 'spake2p|psa_crypto_pake' --output-on-failure
+}
+
 component_tf_psa_crypto_test_no_udbl_division () {
     msg "build: MBEDTLS_NO_UDBL_DIVISION native" # ~ 10s
     scripts/config.py full

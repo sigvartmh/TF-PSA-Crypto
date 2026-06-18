@@ -1,0 +1,21 @@
+Implement SPAKE2+ registration, Matter key schedule and confirmation gate
+
+Round out the SPAKE2+ implementation by addressing three follow-up items:
+
+* Registration (#9381): support deriving a SPAKE2+ key pair with
+  psa_key_derivation_output_key(). w0 and w1 are derived per RFC 9383
+  Section 3.2 by drawing scalar_len + 8 bytes for each and reducing them
+  modulo the curve order. PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_DERIVE is
+  now enabled.
+
+* Matter support (#9378): implement the Matter draft-02 key schedule
+  (split Kae into Ka || Ke and use Ke as the shared secret) instead of
+  reusing the RFC 9383 schedule, and exercise it against the Matter
+  interop test vector at both the engine and PSA levels.
+
+* get_shared_key() hardening (#9370): gate the shared key on an
+  independent "confirmation completed" flag that is set only after the
+  peer's key confirmation MAC has been verified, rather than inferring
+  completion from the round state machine.
+
+Signed-off-by: Sigvart Hovland <Sigvart.Hovland@silabs.com>

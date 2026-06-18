@@ -149,6 +149,111 @@ static psa_status_t psa_pake_ecjpake_setup(mbedtls_psa_pake_operation_t *operati
 static const uint8_t jpake_server_id[] = { 's', 'e', 'r', 'v', 'e', 'r' };
 static const uint8_t jpake_client_id[] = { 'c', 'l', 'i', 'e', 'n', 't' };
 
+#if defined(MBEDTLS_PSA_BUILTIN_SPAKE2P)
+static psa_status_t mbedtls_spake2p_to_psa_error(int ret)
+{
+    /* The SPAKE2+ module returns either a PSA error code (which this repo uses
+     * for the MBEDTLS_ERR_ECP/MPI_* codes, in the range (-0x1000, -0x80]) or a
+     * legacy low-level/high-level code that still needs translating. */
+    if (ret > -0x1000 && ret <= -0x80) {
+        return (psa_status_t) ret;
+    }
+    switch (ret) {
+        case MBEDTLS_ERR_MD_FEATURE_UNAVAILABLE:
+            return PSA_ERROR_NOT_SUPPORTED;
+        default:
+            return PSA_ERROR_GENERIC_ERROR;
+    }
+}
+
+/*
+ * Map the PSA cipher suite + collected inputs to the SPAKE2+ ciphersuite and
+ * set up the built-in operation. The role is derived from the length of the
+ * password-derived key material: w0 || w1 (key pair / Prover / client) is
+ * 2 * plen bytes, while w0 || L (public key / Verifier / server) is
+ * plen + (2 * plen + 1) bytes.
+ */
+static psa_status_t psa_pake_spake2p_setup(
+    mbedtls_psa_pake_operation_t *operation,
+    const psa_pake_cipher_suite_t *cipher_suite,
+    const uint8_t *user, size_t user_len,
+    const uint8_t *peer, size_t peer_len,
+    const uint8_t *context, size_t context_len)
+{
+    int ret;
+    psa_algorithm_t alg = cipher_suite->algorithm;
+    mbedtls_spake2p_role role;
+    mbedtls_spake2p_mac_type mac;
+    mbedtls_spake2p_kdf_type kdf = MBEDTLS_SPAKE2P_KDF_RFC9383;
+    mbedtls_md_type_t hash;
+    mbedtls_ecp_group_id curve;
+    size_t plen;
+
+    if (cipher_suite->type != PSA_PAKE_PRIMITIVE_TYPE_ECC ||
+        cipher_suite->family != PSA_ECC_FAMILY_SECP_R1) {
+        return PSA_ERROR_NOT_SUPPORTED;
+    }
+
+    curve = mbedtls_ecc_group_from_psa(PSA_ECC_FAMILY_SECP_R1, cipher_suite->bits);
+    if (curve == MBEDTLS_ECP_DP_NONE) {
+        return PSA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (PSA_ALG_IS_SPAKE2P_CMAC(alg)) {
+        mac = MBEDTLS_SPAKE2P_MAC_CMAC;
+        hash = mbedtls_md_type_from_psa_alg(PSA_ALG_GET_HASH(alg));
+    } else if (alg == PSA_ALG_SPAKE2P_MATTER) {
+        /* Matter is the HMAC-SHA-256 / P-256 ciphersuite, but with the older
+         * draft-02 key schedule (split digest), not the RFC 9383 one. */
+        if (cipher_suite->bits != 256) {
+            return PSA_ERROR_NOT_SUPPORTED;
+        }
+        mac = MBEDTLS_SPAKE2P_MAC_HMAC;
+        hash = MBEDTLS_MD_SHA256;
+        kdf = MBEDTLS_SPAKE2P_KDF_MATTER;
+    } else if (PSA_ALG_IS_SPAKE2P_HMAC(alg)) {
+        mac = MBEDTLS_SPAKE2P_MAC_HMAC;
+        hash = mbedtls_md_type_from_psa_alg(PSA_ALG_GET_HASH(alg));
+    } else {
+        return PSA_ERROR_NOT_SUPPORTED;
+    }
+
+    plen = (cipher_suite->bits + 7) / 8;
+    if (operation->password_len == 2 * plen) {
+        role = MBEDTLS_SPAKE2P_CLIENT;
+    } else if (operation->password_len == plen + (2 * plen + 1)) {
+        role = MBEDTLS_SPAKE2P_SERVER;
+    } else {
+        return PSA_ERROR_INVALID_ARGUMENT;
+    }
+
+    mbedtls_spake2p_init(&operation->ctx.spake2p);
+
+    ret = mbedtls_spake2p_setup(&operation->ctx.spake2p, role, hash, mac, kdf,
+                                curve,
+                                operation->password, operation->password_len);
+    if (ret != 0) {
+        return mbedtls_spake2p_to_psa_error(ret);
+    }
+
+    ret = mbedtls_spake2p_set_user(&operation->ctx.spake2p, user, user_len);
+    if (ret != 0) {
+        return mbedtls_spake2p_to_psa_error(ret);
+    }
+    ret = mbedtls_spake2p_set_peer(&operation->ctx.spake2p, peer, peer_len);
+    if (ret != 0) {
+        return mbedtls_spake2p_to_psa_error(ret);
+    }
+    ret = mbedtls_spake2p_set_context(&operation->ctx.spake2p,
+                                      context, context_len);
+    if (ret != 0) {
+        return mbedtls_spake2p_to_psa_error(ret);
+    }
+
+    return PSA_SUCCESS;
+}
+#endif /* MBEDTLS_PSA_BUILTIN_SPAKE2P */
+
 psa_status_t mbedtls_psa_pake_setup(mbedtls_psa_pake_operation_t *operation,
                                     const psa_crypto_driver_pake_inputs_t *inputs)
 {
@@ -184,16 +289,20 @@ psa_status_t mbedtls_psa_pake_setup(mbedtls_psa_pake_operation_t *operation,
         goto error;
     }
 
-    user = mbedtls_calloc(1, user_len);
-    if (user == NULL) {
-        status = PSA_ERROR_INSUFFICIENT_MEMORY;
-        goto error;
+    if (user_len > 0) {
+        user = mbedtls_calloc(1, user_len);
+        if (user == NULL) {
+            status = PSA_ERROR_INSUFFICIENT_MEMORY;
+            goto error;
+        }
     }
 
-    peer = mbedtls_calloc(1, peer_len);
-    if (peer == NULL) {
-        status = PSA_ERROR_INSUFFICIENT_MEMORY;
-        goto error;
+    if (peer_len > 0) {
+        peer = mbedtls_calloc(1, peer_len);
+        if (peer == NULL) {
+            status = PSA_ERROR_INSUFFICIENT_MEMORY;
+            goto error;
+        }
     }
 
     status = psa_crypto_driver_pake_get_password(inputs, operation->password,
@@ -202,16 +311,24 @@ psa_status_t mbedtls_psa_pake_setup(mbedtls_psa_pake_operation_t *operation,
         goto error;
     }
 
-    status = psa_crypto_driver_pake_get_user(inputs, user,
-                                             user_len, &actual_user_len);
-    if (status != PSA_SUCCESS) {
-        goto error;
+    if (user_len > 0) {
+        status = psa_crypto_driver_pake_get_user(inputs, user,
+                                                 user_len, &actual_user_len);
+        if (status != PSA_SUCCESS) {
+            goto error;
+        }
+    } else {
+        actual_user_len = 0;
     }
 
-    status = psa_crypto_driver_pake_get_peer(inputs, peer,
-                                             peer_len, &actual_peer_len);
-    if (status != PSA_SUCCESS) {
-        goto error;
+    if (peer_len > 0) {
+        status = psa_crypto_driver_pake_get_peer(inputs, peer,
+                                                 peer_len, &actual_peer_len);
+        if (status != PSA_SUCCESS) {
+            goto error;
+        }
+    } else {
+        actual_peer_len = 0;
     }
 
     operation->password_len = actual_password_len;
@@ -258,12 +375,47 @@ psa_status_t mbedtls_psa_pake_setup(mbedtls_psa_pake_operation_t *operation,
         mbedtls_free(user); mbedtls_free(peer);
 
         return PSA_SUCCESS;
-    } else
-#else
-    (void) operation;
-    (void) inputs;
-#endif
-    { status = PSA_ERROR_NOT_SUPPORTED; }
+    }
+#endif /* MBEDTLS_PSA_BUILTIN_ALG_JPAKE */
+#if defined(MBEDTLS_PSA_BUILTIN_SPAKE2P)
+    if (PSA_ALG_IS_SPAKE2P(cipher_suite.algorithm)) {
+        uint8_t *context = NULL;
+        size_t context_len = 0, actual_context_len = 0;
+
+        status = psa_crypto_driver_pake_get_context_len(inputs, &context_len);
+        if (status != PSA_SUCCESS) {
+            goto error;
+        }
+        if (context_len != 0) {
+            context = mbedtls_calloc(1, context_len);
+            if (context == NULL) {
+                status = PSA_ERROR_INSUFFICIENT_MEMORY;
+                goto error;
+            }
+            status = psa_crypto_driver_pake_get_context(inputs, context,
+                                                        context_len,
+                                                        &actual_context_len);
+            if (status != PSA_SUCCESS) {
+                mbedtls_free(context);
+                goto error;
+            }
+        }
+
+        status = psa_pake_spake2p_setup(operation, &cipher_suite,
+                                        user, actual_user_len,
+                                        peer, actual_peer_len,
+                                        context, actual_context_len);
+        mbedtls_free(context);
+        if (status != PSA_SUCCESS) {
+            goto error;
+        }
+
+        mbedtls_free(user); mbedtls_free(peer);
+
+        return PSA_SUCCESS;
+    }
+#endif /* MBEDTLS_PSA_BUILTIN_SPAKE2P */
+    status = PSA_ERROR_NOT_SUPPORTED;
 
 error:
     mbedtls_free(user); mbedtls_free(peer);
@@ -375,14 +527,34 @@ static psa_status_t mbedtls_psa_pake_output_internal(
         }
 
         return PSA_SUCCESS;
-    } else
-#else
+    }
+#endif /* MBEDTLS_PSA_BUILTIN_ALG_JPAKE */
+#if defined(MBEDTLS_PSA_BUILTIN_SPAKE2P)
+    if (PSA_ALG_IS_SPAKE2P(operation->alg)) {
+        if (step == PSA_SPAKE2P_STEP_KEY_SHARE) {
+            ret = mbedtls_spake2p_write_key_share(&operation->ctx.spake2p,
+                                                  output, output_size,
+                                                  output_length,
+                                                  mbedtls_psa_get_random,
+                                                  MBEDTLS_PSA_RANDOM_STATE);
+        } else if (step == PSA_SPAKE2P_STEP_CONFIRM) {
+            ret = mbedtls_spake2p_write_confirm(&operation->ctx.spake2p,
+                                                output, output_size,
+                                                output_length);
+        } else {
+            return PSA_ERROR_INVALID_ARGUMENT;
+        }
+        if (ret != 0) {
+            return mbedtls_spake2p_to_psa_error(ret);
+        }
+        return PSA_SUCCESS;
+    }
+#endif /* MBEDTLS_PSA_BUILTIN_SPAKE2P */
     (void) step;
     (void) output;
     (void) output_size;
     (void) output_length;
-#endif
-    { return PSA_ERROR_NOT_SUPPORTED; }
+    return PSA_ERROR_NOT_SUPPORTED;
 }
 
 psa_status_t mbedtls_psa_pake_output(mbedtls_psa_pake_operation_t *operation,
@@ -495,13 +667,31 @@ static psa_status_t mbedtls_psa_pake_input_internal(
         }
 
         return PSA_SUCCESS;
-    } else
-#else
+    }
+#endif /* MBEDTLS_PSA_BUILTIN_ALG_JPAKE */
+#if defined(MBEDTLS_PSA_BUILTIN_SPAKE2P)
+    if (PSA_ALG_IS_SPAKE2P(operation->alg)) {
+        if (step == PSA_SPAKE2P_STEP_KEY_SHARE) {
+            ret = mbedtls_spake2p_read_key_share(&operation->ctx.spake2p,
+                                                 input, input_length,
+                                                 mbedtls_psa_get_random,
+                                                 MBEDTLS_PSA_RANDOM_STATE);
+        } else if (step == PSA_SPAKE2P_STEP_CONFIRM) {
+            ret = mbedtls_spake2p_read_confirm(&operation->ctx.spake2p,
+                                               input, input_length);
+        } else {
+            return PSA_ERROR_INVALID_ARGUMENT;
+        }
+        if (ret != 0) {
+            return mbedtls_spake2p_to_psa_error(ret);
+        }
+        return PSA_SUCCESS;
+    }
+#endif /* MBEDTLS_PSA_BUILTIN_SPAKE2P */
     (void) step;
     (void) input;
     (void) input_length;
-#endif
-    { return PSA_ERROR_NOT_SUPPORTED; }
+    return PSA_ERROR_NOT_SUPPORTED;
 }
 
 psa_status_t mbedtls_psa_pake_input(mbedtls_psa_pake_operation_t *operation,
@@ -535,11 +725,23 @@ psa_status_t mbedtls_psa_pake_get_implicit_key(
         }
 
         return PSA_SUCCESS;
-    } else
-#else
+    }
+#endif /* MBEDTLS_PSA_BUILTIN_ALG_JPAKE */
+#if defined(MBEDTLS_PSA_BUILTIN_SPAKE2P)
+    if (PSA_ALG_IS_SPAKE2P(operation->alg)) {
+        ret = mbedtls_spake2p_get_shared_key(&operation->ctx.spake2p,
+                                             output, output_size,
+                                             output_length);
+        if (ret != 0) {
+            return mbedtls_spake2p_to_psa_error(ret);
+        }
+        return PSA_SUCCESS;
+    }
+#endif /* MBEDTLS_PSA_BUILTIN_SPAKE2P */
     (void) output;
-#endif
-    { return PSA_ERROR_NOT_SUPPORTED; }
+    (void) output_size;
+    (void) output_length;
+    return PSA_ERROR_NOT_SUPPORTED;
 }
 
 psa_status_t mbedtls_psa_pake_abort(mbedtls_psa_pake_operation_t *operation)
@@ -555,6 +757,11 @@ psa_status_t mbedtls_psa_pake_abort(mbedtls_psa_pake_operation_t *operation)
         operation->buffer_length = 0;
         operation->buffer_offset = 0;
         mbedtls_ecjpake_free(&operation->ctx.jpake);
+    }
+#endif
+#if defined(MBEDTLS_PSA_BUILTIN_SPAKE2P)
+    if (PSA_ALG_IS_SPAKE2P(operation->alg)) {
+        mbedtls_spake2p_free(&operation->ctx.spake2p);
     }
 #endif
 

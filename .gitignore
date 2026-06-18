@@ -50,6 +50,9 @@ massif-*
 # Microsoft CMake extension for Visual Studio Code generates a build directory by default
 /build/
 
+# Out-of-tree CMake build directories (build/, build-*/, e.g. build_spake2p, build-split):
+/build[-_]*/
+
 # Generated documentation:
 /apidoc
 
