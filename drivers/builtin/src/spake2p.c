@@ -41,6 +41,7 @@
  * Per-curve constant points M and N (RFC 9383 Section 4), stored in SEC1
  * compressed form. mbedtls_ecp_point_read_binary() decompresses them.
  */
+#if defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
 static const unsigned char spake2p_secp256r1_M[] = {
     0x02, 0x88, 0x6e, 0x2f, 0x97, 0xac, 0xe4, 0x6e, 0x55, 0xba, 0x9d, 0xd7,
     0x24, 0x25, 0x79, 0xf2, 0x99, 0x3b, 0x64, 0xe1, 0x6e, 0xf3, 0xdc, 0xab,
@@ -51,6 +52,8 @@ static const unsigned char spake2p_secp256r1_N[] = {
     0x7f, 0x38, 0xc3, 0x77, 0x07, 0x19, 0xc6, 0x29, 0xd7, 0x01, 0x4d, 0x49,
     0xa2, 0x4b, 0x4f, 0x98, 0xba, 0xa1, 0x29, 0x2b, 0x49,
 };
+#endif /* MBEDTLS_ECP_DP_SECP256R1_ENABLED */
+#if defined(MBEDTLS_ECP_DP_SECP384R1_ENABLED)
 static const unsigned char spake2p_secp384r1_M[] = {
     0x03, 0x0f, 0xf0, 0x89, 0x5a, 0xe5, 0xeb, 0xf6, 0x18, 0x70, 0x80, 0xa8,
     0x2d, 0x82, 0xb4, 0x2e, 0x27, 0x65, 0xe3, 0xb2, 0xf8, 0x74, 0x9c, 0x7e,
@@ -65,6 +68,8 @@ static const unsigned char spake2p_secp384r1_N[] = {
     0x49, 0x02, 0x14, 0xcf, 0x9a, 0xa3, 0xf0, 0xba, 0xab, 0x4b, 0x66, 0x5c,
     0x10,
 };
+#endif /* MBEDTLS_ECP_DP_SECP384R1_ENABLED */
+#if defined(MBEDTLS_ECP_DP_SECP521R1_ENABLED)
 static const unsigned char spake2p_secp521r1_M[] = {
     0x02, 0x00, 0x3f, 0x06, 0xf3, 0x81, 0x31, 0xb2, 0xba, 0x26, 0x00, 0x79,
     0x1e, 0x82, 0x48, 0x8e, 0x8d, 0x20, 0xab, 0x88, 0x9a, 0xf7, 0x53, 0xa4,
@@ -81,6 +86,7 @@ static const unsigned char spake2p_secp521r1_N[] = {
     0x04, 0x8c, 0x58, 0xa4, 0x2e, 0x8e, 0xd0, 0x4c, 0xef, 0x05, 0x2a, 0x3b,
     0xc3, 0x49, 0xd9, 0x55, 0x75, 0xcd, 0x25,
 };
+#endif /* MBEDTLS_ECP_DP_SECP521R1_ENABLED */
 
 /*
  * Look up the compressed M and N constants for a curve.
@@ -92,21 +98,27 @@ static int spake2p_get_mn(mbedtls_ecp_group_id curve,
                           size_t *clen)
 {
     switch (curve) {
+#if defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED)
         case MBEDTLS_ECP_DP_SECP256R1:
             *m = spake2p_secp256r1_M;
             *n = spake2p_secp256r1_N;
             *clen = sizeof(spake2p_secp256r1_M);
             return 0;
+#endif
+#if defined(MBEDTLS_ECP_DP_SECP384R1_ENABLED)
         case MBEDTLS_ECP_DP_SECP384R1:
             *m = spake2p_secp384r1_M;
             *n = spake2p_secp384r1_N;
             *clen = sizeof(spake2p_secp384r1_M);
             return 0;
+#endif
+#if defined(MBEDTLS_ECP_DP_SECP521R1_ENABLED)
         case MBEDTLS_ECP_DP_SECP521R1:
             *m = spake2p_secp521r1_M;
             *n = spake2p_secp521r1_N;
             *clen = sizeof(spake2p_secp521r1_M);
             return 0;
+#endif
         default:
             return MBEDTLS_ERR_ECP_FEATURE_UNAVAILABLE;
     }
