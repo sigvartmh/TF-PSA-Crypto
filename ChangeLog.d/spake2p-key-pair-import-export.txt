@@ -1,0 +1,5 @@
+Features
+   * Add support for importing and exporting SPAKE2+ key pairs
+     (key type PSA_KEY_TYPE_SPAKE2P_KEY_PAIR) through psa_import_key() and
+     psa_export_key(). The prover key pair is the concatenation w0 || w1 of
+     two equal-length secp256r1/secp384r1/secp521r1 scalars. Resolves #9343.
