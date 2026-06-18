@@ -9805,6 +9805,17 @@ psa_status_t psa_pake_get_shared_key(psa_pake_operation_t *operation,
         }
     } else
 #endif /* PSA_WANT_ALG_JPAKE */
+#if defined(PSA_WANT_ALG_SOME_SPAKE2P)
+    if (PSA_ALG_IS_SPAKE2P(operation->alg)) {
+        psa_spake2p_computation_stage_t *computation_stage =
+            &operation->computation_stage.spake2p;
+        /* Both the key share and the confirmation exchanges must be done. */
+        if (computation_stage->round != PSA_SPAKE2P_FINISHED) {
+            status = PSA_ERROR_BAD_STATE;
+            goto exit;
+        }
+    } else
+#endif /* PSA_WANT_ALG_SOME_SPAKE2P */
     {
         status = PSA_ERROR_NOT_SUPPORTED;
         goto exit;

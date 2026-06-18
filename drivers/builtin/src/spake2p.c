@@ -855,11 +855,40 @@ int mbedtls_spake2p_read_confirm(mbedtls_spake2p_context *ctx,
         goto cleanup;
     }
 
+    /* The peer's confirmation MAC verified: key confirmation is complete on
+     * this side. This guards mbedtls_spake2p_get_shared_key() and is tracked
+     * independently of any call-sequence enforcement (RFC 9383 Section 4: the
+     * shared secret must not be used before key confirmation). */
+    ctx->confirmed = 1;
     ret = 0;
 
 cleanup:
     mbedtls_platform_zeroize(expected, sizeof(expected));
     return ret;
+}
+
+int mbedtls_spake2p_get_shared_key(mbedtls_spake2p_context *ctx,
+                                   unsigned char *buf, size_t len, size_t *olen)
+{
+    if (!ctx->keys_ready) {
+        return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
+    }
+    /* Security property: refuse to release the shared key until the peer's key
+     * confirmation has been verified. This is a defence-in-depth gate keyed on
+     * the dedicated `confirmed` flag (set only when the confirmation MAC was
+     * successfully verified), deliberately separate from whatever enforces the
+     * protocol call sequence at higher layers. */
+    if (!ctx->confirmed) {
+        return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
+    }
+    if (len < ctx->shared_key_len) {
+        return MBEDTLS_ERR_ECP_BUFFER_TOO_SMALL;
+    }
+
+    memcpy(buf, ctx->K_shared, ctx->shared_key_len);
+    *olen = ctx->shared_key_len;
+
+    return 0;
 }
 
 #if defined(MBEDTLS_TEST_HOOKS)
