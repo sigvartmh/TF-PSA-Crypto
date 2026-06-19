@@ -9676,18 +9676,17 @@ static const psa_spake2p_curve_info_t *psa_spake2p_get_curve_from_data_length(
 }
 
 
+/* Map a SECP_R1 key-pair scalar length (w0/w1) to the curve bit-size, using the
+ * same table as the public-key lookup so the curve set is defined in one place. */
 static size_t psa_spake2p_secp_r1_bits_from_scalar_len(size_t scalar_len)
 {
-    switch (scalar_len) {
-        case 32:
-            return 256;
-        case 48:
-            return 384;
-        case 66:
-            return 521;
-        default:
-            return 0;
+    for (size_t i = 0; i < ARRAY_LENGTH(spake2p_supported_curves); i++) {
+        const psa_spake2p_curve_info_t *info = &spake2p_supported_curves[i];
+        if (info->family == PSA_ECC_FAMILY_SECP_R1 && info->w0_len == scalar_len) {
+            return info->bits;
+        }
     }
+    return 0;
 }
 
 psa_status_t psa_spake2p_import_key(
