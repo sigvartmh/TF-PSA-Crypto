@@ -1,0 +1,429 @@
+From 8ab1f5415ebf6a471f8fe151b75e8a7a9c58a2c6 Mon Sep 17 00:00:00 2001
+From: tester <tester@example.com>
+Date: Tue, 19 May 2026 08:23:44 +0000
+Subject: [PATCH] tests: add deterministic Matter SPAKE2+ vector
+
+---
+ drivers/builtin/src/psa_crypto_spake2p.c      |  32 +++
+ drivers/builtin/src/psa_crypto_spake2p.h      |   5 +
+ .../spake2p_matter_p256_interop.txt           |  37 +++
+ .../spake2p_matter_p256_vectors.placeholder   |  11 -
+ .../suites/test_suite_psa_crypto_spake2p.data |   4 +
+ .../test_suite_psa_crypto_spake2p.function    | 260 ++++++++++++++++++
+ 6 files changed, 338 insertions(+), 11 deletions(-)
+ create mode 100644 tests/data_files/spake2p_matter_p256_interop.txt
+ delete mode 100644 tests/data_files/spake2p_matter_p256_vectors.placeholder
+
+diff --git a/drivers/builtin/src/psa_crypto_spake2p.c b/drivers/builtin/src/psa_crypto_spake2p.c
+index 9f7b0ab..ee62c13 100644
+--- a/drivers/builtin/src/psa_crypto_spake2p.c
++++ b/drivers/builtin/src/psa_crypto_spake2p.c
+@@ -55,6 +55,25 @@ static const uint8_t mbedtls_psa_spake2p_info_confirmation_keys[] = {
+     't', 'i', 'o', 'n', 'K', 'e', 'y', 's'
+ };
+ 
++#if defined(MBEDTLS_TEST_HOOKS)
++static uint8_t mbedtls_psa_spake2p_test_next_scalar[
++    MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES];
++static unsigned mbedtls_psa_spake2p_test_next_scalar_is_set;
++
++psa_status_t mbedtls_psa_spake2p_test_set_next_scalar(
++    const uint8_t scalar[MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES])
++{
++    if (scalar == NULL) {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++
++    memcpy(mbedtls_psa_spake2p_test_next_scalar, scalar,
++           sizeof(mbedtls_psa_spake2p_test_next_scalar));
++    mbedtls_psa_spake2p_test_next_scalar_is_set = 1;
++    return PSA_SUCCESS;
++}
++#endif /* MBEDTLS_TEST_HOOKS */
++
+ static psa_status_t mbedtls_psa_spake2p_md_status(int ret)
+ {
+     if (ret == 0) {
+@@ -403,6 +422,19 @@ static psa_status_t mbedtls_psa_spake2p_generate_scalar(
+ 
+     mbedtls_mpi_init(&k);
+ 
++#if defined(MBEDTLS_TEST_HOOKS)
++    if (mbedtls_psa_spake2p_test_next_scalar_is_set) {
++        memcpy(scalar, mbedtls_psa_spake2p_test_next_scalar,
++               MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES);
++        mbedtls_platform_zeroize(mbedtls_psa_spake2p_test_next_scalar,
++                                 sizeof(mbedtls_psa_spake2p_test_next_scalar));
++        mbedtls_psa_spake2p_test_next_scalar_is_set = 0;
++        status = mbedtls_psa_spake2p_ecp_read_scalar(
++            grp, &k, scalar, MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES);
++        goto exit;
++    }
++#endif /* MBEDTLS_TEST_HOOKS */
++
+     for (attempts = 0; attempts < MBEDTLS_PSA_SPAKE2P_RANDOM_SCALAR_TRIES;
+          attempts++) {
+         int ret = mbedtls_psa_get_random(MBEDTLS_PSA_RANDOM_STATE,
+diff --git a/drivers/builtin/src/psa_crypto_spake2p.h b/drivers/builtin/src/psa_crypto_spake2p.h
+index aaf5087..c166a29 100644
+--- a/drivers/builtin/src/psa_crypto_spake2p.h
++++ b/drivers/builtin/src/psa_crypto_spake2p.h
+@@ -114,4 +114,9 @@ psa_status_t mbedtls_psa_spake2p_get_shared_key(
+ psa_status_t mbedtls_psa_spake2p_abort(
+     mbedtls_psa_spake2p_operation_t *operation);
+ 
++#if defined(MBEDTLS_TEST_HOOKS)
++psa_status_t mbedtls_psa_spake2p_test_set_next_scalar(
++    const uint8_t scalar[MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES]);
++#endif /* MBEDTLS_TEST_HOOKS */
++
+ #endif /* TF_PSA_CRYPTO_PSA_CRYPTO_SPAKE2P_H */
+diff --git a/tests/data_files/spake2p_matter_p256_interop.txt b/tests/data_files/spake2p_matter_p256_interop.txt
+new file mode 100644
+index 0000000..c81086a
+--- /dev/null
++++ b/tests/data_files/spake2p_matter_p256_interop.txt
+@@ -0,0 +1,37 @@
++Matter SPAKE2+ P-256 deterministic interop vector.
++
++This vector follows the connectedhomeip Matter SPAKE2+ draft-02 flow:
++  TT = len(Context) || Context
++     || len(A) || A || len(B) || B
++     || len(M) || M || len(N) || N
++     || len(X) || X || len(Y) || Y
++     || len(Z) || Z || len(V) || V
++     || len(w0) || w0
++  Kae = SHA256(TT)
++  Ka = Kae[0..15]
++  Ke = Kae[16..31]
++  Kca || Kcb = HKDF-SHA256(ikm = Ka,
++                            salt = nil,
++                            info = "ConfirmationKeys",
++                            L = 32)
++  confirmP = HMAC-SHA256(Kca, shareV)
++  confirmV = HMAC-SHA256(Kcb, shareP)
++
++A/client = 636c69656e74
++B/server = 736572766572
++Context = 4d6174746572205350414b45322b2050323536207465737420636f6e74657874
++w0 = 0827c8c6230d1318f075182db436c8d79bf29aebc89510bbc78b145d50c9bf44
++w1 = e7d47c0863552a5d3d73c5b30715a430e7a4bf92eb47e86c1cf85d1c57b66911
++x = dc09d5bcd6b34fce99207dabd2e5ce71af3f26597867ddc02c5fc30829fc90c2
++y = a821aa76e0a3f1ba7840fc88dedb4e5473e3249ae3455a8a633f7f677d380b9a
++L = 04bfa7b5eda26af87246cefc3898013af4828968bdc0a26440d3c329600a3df8e3dd7f450995b41f1c242e2c0affe56c65460b06109f44389d225813f83d8bd340
++shareP = 04dc08124d9a1f1bb5d1971b15e735a734bbd9d4dbce73e54b8e08d6d4189801307ae38c2cf0bae92f267b858df138cd92b1ebf113888f364add15ea981634fb95
++shareV = 0414dac850052d2b12fc82bb2e08e6d60f69f17ad85c6f260c0399b8e3e87e0d7260e03369d8e0d0d4079c466ce53404b7db742b2049684857c4740940b563d3c3
++Z = 045af7d46bcfd498c7f0909d3a49738df8f40ff3896c76c6a11e1e369a4ae7c23d38a90b0de192e8bbdf58cfe77cb13d74b20250063253ae9bcea7f02638fffe14
++V = 048a3a5169dec00bccc5e93a46259ba0b25bf3bbe39480db064a78e5b9cc81ea3dd726eb894a432c197543ae150fa1d7a5049957090f03f934e3d1c7a7ae97522f
++Ka = 458a98ed9deab5eb5e931f10724a55f7
++Ke = b93a7e8551155cfe76e76dadabdbb0d6
++Kca = d92be283e42fdbc0182ef141be48ea54
++Kcb = 6c5818cd6af325e3277d0b741338e833
++confirmP = 6f3ac336f8ed6a8057d1ae648de5794ddccba6693b0b16f460b5469138d83959
++confirmV = 0b4bc4bdf5b027a16b6654fd7c2e8b10fb72830ec0ea1bcdf1b9de088074990c
+diff --git a/tests/data_files/spake2p_matter_p256_vectors.placeholder b/tests/data_files/spake2p_matter_p256_vectors.placeholder
+deleted file mode 100644
+index 594e0a6..0000000
+--- a/tests/data_files/spake2p_matter_p256_vectors.placeholder
++++ /dev/null
+@@ -1,11 +0,0 @@
+-Placeholder for Matter SPAKE2+ P-256 vectors.
+-
+-The protocol engine patch should replace this with deterministic vectors that
+-exercise:
+-- Matter draft-02 transcript and key schedule
+-- shareP/shareV generation
+-- confirmP/confirmV verification
+-- omitted context versus explicit empty context
+-
+-The implementation must use PSA_PAKE_STEP_CONFIRM for confirmation steps..
+-Do not introduce non-existent confirmation-step aliases.
+diff --git a/tests/suites/test_suite_psa_crypto_spake2p.data b/tests/suites/test_suite_psa_crypto_spake2p.data
+index 684f038..2e70e82 100644
+--- a/tests/suites/test_suite_psa_crypto_spake2p.data
++++ b/tests/suites/test_suite_psa_crypto_spake2p.data
+@@ -1,2 +1,6 @@
+ PSA SPAKE2+ Matter size macros
+ spake2p_matter_size_macros:
++
++PSA SPAKE2+ Matter connectedhomeip-compatible deterministic vector
++depends_on:MBEDTLS_TEST_HOOKS:MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P:PSA_WANT_ALG_SPAKE2P_MATTER
++spake2p_matter_interop_vector:
+diff --git a/tests/suites/test_suite_psa_crypto_spake2p.function b/tests/suites/test_suite_psa_crypto_spake2p.function
+index 5de14bd..5f11163 100644
+--- a/tests/suites/test_suite_psa_crypto_spake2p.function
++++ b/tests/suites/test_suite_psa_crypto_spake2p.function
+@@ -1,6 +1,162 @@
+ /* BEGIN_HEADER */
+ #include "psa/crypto.h"
+ #include "psa/crypto_extra.h"
++#include <string.h>
++
++#define SPAKE2P_P256_SCALAR_BYTES 32u
++#define SPAKE2P_P256_POINT_BYTES 65u
++#define SPAKE2P_CONFIRM_BYTES 32u
++#define SPAKE2P_SHARED_KEY_BYTES 16u
++
++#if defined(MBEDTLS_TEST_HOOKS)
++psa_status_t mbedtls_psa_spake2p_test_set_next_scalar(
++    const uint8_t scalar[SPAKE2P_P256_SCALAR_BYTES]);
++#endif
++
++static const uint8_t spake2p_matter_context[] = {
++    0x4d, 0x61, 0x74, 0x74, 0x65, 0x72, 0x20, 0x53,
++    0x50, 0x41, 0x4b, 0x45, 0x32, 0x2b, 0x20, 0x50,
++    0x32, 0x35, 0x36, 0x20, 0x74, 0x65, 0x73, 0x74,
++    0x20, 0x63, 0x6f, 0x6e, 0x74, 0x65, 0x78, 0x74
++};
++static const uint8_t spake2p_matter_bad_context[] = {
++    0x4d, 0x61, 0x74, 0x74, 0x65, 0x72, 0x20, 0x53,
++    0x50, 0x41, 0x4b, 0x45, 0x32, 0x2b, 0x20, 0x62,
++    0x61, 0x64, 0x20, 0x63, 0x6f, 0x6e, 0x74, 0x65,
++    0x78, 0x74
++};
++static const uint8_t spake2p_matter_client_id[] = {
++    0x63, 0x6c, 0x69, 0x65, 0x6e, 0x74
++};
++static const uint8_t spake2p_matter_server_id[] = {
++    0x73, 0x65, 0x72, 0x76, 0x65, 0x72
++};
++static const uint8_t spake2p_matter_keypair[] = {
++    0x08, 0x27, 0xc8, 0xc6, 0x23, 0x0d, 0x13, 0x18,
++    0xf0, 0x75, 0x18, 0x2d, 0xb4, 0x36, 0xc8, 0xd7,
++    0x9b, 0xf2, 0x9a, 0xeb, 0xc8, 0x95, 0x10, 0xbb,
++    0xc7, 0x8b, 0x14, 0x5d, 0x50, 0xc9, 0xbf, 0x44,
++    0xe7, 0xd4, 0x7c, 0x08, 0x63, 0x55, 0x2a, 0x5d,
++    0x3d, 0x73, 0xc5, 0xb3, 0x07, 0x15, 0xa4, 0x30,
++    0xe7, 0xa4, 0xbf, 0x92, 0xeb, 0x47, 0xe8, 0x6c,
++    0x1c, 0xf8, 0x5d, 0x1c, 0x57, 0xb6, 0x69, 0x11
++};
++static const uint8_t spake2p_matter_client_scalar[] = {
++    0xdc, 0x09, 0xd5, 0xbc, 0xd6, 0xb3, 0x4f, 0xce,
++    0x99, 0x20, 0x7d, 0xab, 0xd2, 0xe5, 0xce, 0x71,
++    0xaf, 0x3f, 0x26, 0x59, 0x78, 0x67, 0xdd, 0xc0,
++    0x2c, 0x5f, 0xc3, 0x08, 0x29, 0xfc, 0x90, 0xc2
++};
++static const uint8_t spake2p_matter_server_scalar[] = {
++    0xa8, 0x21, 0xaa, 0x76, 0xe0, 0xa3, 0xf1, 0xba,
++    0x78, 0x40, 0xfc, 0x88, 0xde, 0xdb, 0x4e, 0x54,
++    0x73, 0xe3, 0x24, 0x9a, 0xe3, 0x45, 0x5a, 0x8a,
++    0x63, 0x3f, 0x7f, 0x67, 0x7d, 0x38, 0x0b, 0x9a
++};
++static const uint8_t spake2p_matter_share_p[] = {
++    0x04, 0xdc, 0x08, 0x12, 0x4d, 0x9a, 0x1f, 0x1b,
++    0xb5, 0xd1, 0x97, 0x1b, 0x15, 0xe7, 0x35, 0xa7,
++    0x34, 0xbb, 0xd9, 0xd4, 0xdb, 0xce, 0x73, 0xe5,
++    0x4b, 0x8e, 0x08, 0xd6, 0xd4, 0x18, 0x98, 0x01,
++    0x30, 0x7a, 0xe3, 0x8c, 0x2c, 0xf0, 0xba, 0xe9,
++    0x2f, 0x26, 0x7b, 0x85, 0x8d, 0xf1, 0x38, 0xcd,
++    0x92, 0xb1, 0xeb, 0xf1, 0x13, 0x88, 0x8f, 0x36,
++    0x4a, 0xdd, 0x15, 0xea, 0x98, 0x16, 0x34, 0xfb,
++    0x95
++};
++static const uint8_t spake2p_matter_share_v[] = {
++    0x04, 0x14, 0xda, 0xc8, 0x50, 0x05, 0x2d, 0x2b,
++    0x12, 0xfc, 0x82, 0xbb, 0x2e, 0x08, 0xe6, 0xd6,
++    0x0f, 0x69, 0xf1, 0x7a, 0xd8, 0x5c, 0x6f, 0x26,
++    0x0c, 0x03, 0x99, 0xb8, 0xe3, 0xe8, 0x7e, 0x0d,
++    0x72, 0x60, 0xe0, 0x33, 0x69, 0xd8, 0xe0, 0xd0,
++    0xd4, 0x07, 0x9c, 0x46, 0x6c, 0xe5, 0x34, 0x04,
++    0xb7, 0xdb, 0x74, 0x2b, 0x20, 0x49, 0x68, 0x48,
++    0x57, 0xc4, 0x74, 0x09, 0x40, 0xb5, 0x63, 0xd3,
++    0xc3
++};
++static const uint8_t spake2p_matter_confirm_p[] = {
++    0x6f, 0x3a, 0xc3, 0x36, 0xf8, 0xed, 0x6a, 0x80,
++    0x57, 0xd1, 0xae, 0x64, 0x8d, 0xe5, 0x79, 0x4d,
++    0xdc, 0xcb, 0xa6, 0x69, 0x3b, 0x0b, 0x16, 0xf4,
++    0x60, 0xb5, 0x46, 0x91, 0x38, 0xd8, 0x39, 0x59
++};
++static const uint8_t spake2p_matter_confirm_v[] = {
++    0x0b, 0x4b, 0xc4, 0xbd, 0xf5, 0xb0, 0x27, 0xa1,
++    0x6b, 0x66, 0x54, 0xfd, 0x7c, 0x2e, 0x8b, 0x10,
++    0xfb, 0x72, 0x83, 0x0e, 0xc0, 0xea, 0x1b, 0xcd,
++    0xf1, 0xb9, 0xde, 0x08, 0x80, 0x74, 0x99, 0x0c
++};
++static const uint8_t spake2p_matter_shared_key[] = {
++    0xb9, 0x3a, 0x7e, 0x85, 0x51, 0x15, 0x5c, 0xfe,
++    0x76, 0xe7, 0x6d, 0xad, 0xab, 0xdb, 0xb0, 0xd6
++};
++
++static void spake2p_matter_init_suite(psa_pake_cipher_suite_t *suite)
++{
++    *suite = psa_pake_cipher_suite_init();
++    psa_pake_cs_set_algorithm(suite, PSA_ALG_SPAKE2P_MATTER);
++    psa_pake_cs_set_primitive(
++        suite,
++        PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
++                           PSA_ECC_FAMILY_SECP_R1, 256));
++    psa_pake_cs_set_key_confirmation(suite, PSA_PAKE_CONFIRMED_KEY);
++}
++
++static psa_status_t spake2p_matter_import_keypair(psa_key_id_t *key)
++{
++    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
++    psa_status_t status;
++
++    psa_set_key_usage_flags(&attributes,
++                            PSA_KEY_USAGE_DERIVE | PSA_KEY_USAGE_EXPORT);
++    psa_set_key_algorithm(&attributes, PSA_ALG_SPAKE2P_MATTER);
++    psa_set_key_type(&attributes,
++                     PSA_KEY_TYPE_SPAKE2P_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
++    psa_set_key_bits(&attributes, 256);
++
++    status = psa_import_key(&attributes,
++                            spake2p_matter_keypair,
++                            sizeof(spake2p_matter_keypair),
++                            key);
++    psa_reset_key_attributes(&attributes);
++    return status;
++}
++
++static psa_status_t spake2p_matter_setup_party(
++    psa_pake_operation_t *operation,
++    psa_key_id_t key,
++    psa_pake_role_t role,
++    const uint8_t *user,
++    size_t user_len,
++    const uint8_t *peer,
++    size_t peer_len,
++    const uint8_t *context,
++    size_t context_len)
++{
++    psa_pake_cipher_suite_t suite;
++    psa_status_t status;
++
++    spake2p_matter_init_suite(&suite);
++    status = psa_pake_setup(operation, key, &suite);
++    if (status != PSA_SUCCESS) {
++        return status;
++    }
++    status = psa_pake_set_role(operation, role);
++    if (status != PSA_SUCCESS) {
++        return status;
++    }
++    status = psa_pake_set_user(operation, user, user_len);
++    if (status != PSA_SUCCESS) {
++        return status;
++    }
++    status = psa_pake_set_peer(operation, peer, peer_len);
++    if (status != PSA_SUCCESS) {
++        return status;
++    }
++    return psa_pake_set_context(operation, context, context_len);
++}
++
+ /* END_HEADER */
+ 
+ /* BEGIN_CASE */
+@@ -24,3 +180,107 @@ void spake2p_matter_size_macros( void )
+                                          PSA_PAKE_STEP_CONFIRM ) );
+ }
+ /* END_CASE */
++
++/* BEGIN_CASE */
++void spake2p_matter_interop_vector( void )
++{
++#if defined(MBEDTLS_TEST_HOOKS)
++    psa_key_id_t client_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_key_id_t server_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_key_id_t client_shared = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_key_id_t server_shared = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_pake_operation_t client = PSA_PAKE_OPERATION_INIT;
++    psa_pake_operation_t server = PSA_PAKE_OPERATION_INIT;
++    psa_key_attributes_t shared_attributes = PSA_KEY_ATTRIBUTES_INIT;
++    uint8_t share_p[SPAKE2P_P256_POINT_BYTES];
++    uint8_t share_v[SPAKE2P_P256_POINT_BYTES];
++    uint8_t confirm_p[SPAKE2P_CONFIRM_BYTES];
++    uint8_t confirm_v[SPAKE2P_CONFIRM_BYTES];
++    uint8_t exported[SPAKE2P_SHARED_KEY_BYTES];
++    size_t output_length = 0;
++
++    PSA_ASSERT( psa_crypto_init() );
++    PSA_ASSERT( spake2p_matter_import_keypair(&client_key) );
++    PSA_ASSERT( spake2p_matter_import_keypair(&server_key) );
++
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &client, client_key, PSA_PAKE_ROLE_CLIENT,
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &server, server_key, PSA_PAKE_ROLE_SERVER,
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++
++    PSA_ASSERT( mbedtls_psa_spake2p_test_set_next_scalar(
++        spake2p_matter_client_scalar) );
++    PSA_ASSERT( psa_pake_output(&client, PSA_PAKE_STEP_KEY_SHARE,
++                                share_p, sizeof(share_p), &output_length) );
++    TEST_MEMORY_COMPARE(share_p, output_length,
++                        spake2p_matter_share_p,
++                        sizeof(spake2p_matter_share_p));
++
++    PSA_ASSERT( psa_pake_input(&server, PSA_PAKE_STEP_KEY_SHARE,
++                               share_p, output_length) );
++    PSA_ASSERT( mbedtls_psa_spake2p_test_set_next_scalar(
++        spake2p_matter_server_scalar) );
++    PSA_ASSERT( psa_pake_output(&server, PSA_PAKE_STEP_KEY_SHARE,
++                                share_v, sizeof(share_v), &output_length) );
++    TEST_MEMORY_COMPARE(share_v, output_length,
++                        spake2p_matter_share_v,
++                        sizeof(spake2p_matter_share_v));
++
++    PSA_ASSERT( psa_pake_output(&server, PSA_PAKE_STEP_CONFIRM,
++                                confirm_v, sizeof(confirm_v),
++                                &output_length) );
++    TEST_MEMORY_COMPARE(confirm_v, output_length,
++                        spake2p_matter_confirm_v,
++                        sizeof(spake2p_matter_confirm_v));
++
++    PSA_ASSERT( psa_pake_input(&client, PSA_PAKE_STEP_KEY_SHARE,
++                               share_v, sizeof(share_v)) );
++    PSA_ASSERT( psa_pake_input(&client, PSA_PAKE_STEP_CONFIRM,
++                               confirm_v, sizeof(confirm_v)) );
++    PSA_ASSERT( psa_pake_output(&client, PSA_PAKE_STEP_CONFIRM,
++                                confirm_p, sizeof(confirm_p),
++                                &output_length) );
++    TEST_MEMORY_COMPARE(confirm_p, output_length,
++                        spake2p_matter_confirm_p,
++                        sizeof(spake2p_matter_confirm_p));
++
++    PSA_ASSERT( psa_pake_input(&server, PSA_PAKE_STEP_CONFIRM,
++                               confirm_p, sizeof(confirm_p)) );
++
++    psa_set_key_type(&shared_attributes, PSA_KEY_TYPE_RAW_DATA);
++    psa_set_key_usage_flags(&shared_attributes, PSA_KEY_USAGE_EXPORT);
++    PSA_ASSERT( psa_pake_get_shared_key(&client, &shared_attributes,
++                                        &client_shared) );
++    PSA_ASSERT( psa_pake_get_shared_key(&server, &shared_attributes,
++                                        &server_shared) );
++
++    PSA_ASSERT( psa_export_key(client_shared, exported, sizeof(exported),
++                               &output_length) );
++    TEST_MEMORY_COMPARE(exported, output_length,
++                        spake2p_matter_shared_key,
++                        sizeof(spake2p_matter_shared_key));
++    PSA_ASSERT( psa_export_key(server_shared, exported, sizeof(exported),
++                               &output_length) );
++    TEST_MEMORY_COMPARE(exported, output_length,
++                        spake2p_matter_shared_key,
++                        sizeof(spake2p_matter_shared_key));
++
++exit:
++    psa_reset_key_attributes(&shared_attributes);
++    psa_destroy_key(client_shared);
++    psa_destroy_key(server_shared);
++    psa_destroy_key(client_key);
++    psa_destroy_key(server_key);
++    psa_pake_abort(&client);
++    psa_pake_abort(&server);
++#else
++    TEST_ASSERT(0);
++#endif
++}
++/* END_CASE */
+-- 
+2.47.3
+

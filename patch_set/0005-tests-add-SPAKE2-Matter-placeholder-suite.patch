@@ -1,0 +1,74 @@
+From 7391b8ec5b2baa4da427edecb88b2d624e61b02c Mon Sep 17 00:00:00 2001
+From: tester <test@example.com>
+Date: Fri, 8 May 2026 19:41:37 +0000
+Subject: [PATCH 5/5] tests: add SPAKE2+ Matter placeholder suite
+
+---
+ .../spake2p_matter_p256_vectors.placeholder   | 11 ++++++++
+ .../suites/test_suite_psa_crypto_spake2p.data |  2 ++
+ .../test_suite_psa_crypto_spake2p.function    | 26 +++++++++++++++++++
+ 3 files changed, 39 insertions(+)
+ create mode 100644 tests/data_files/spake2p_matter_p256_vectors.placeholder
+ create mode 100644 tests/suites/test_suite_psa_crypto_spake2p.data
+ create mode 100644 tests/suites/test_suite_psa_crypto_spake2p.function
+
+diff --git a/tests/data_files/spake2p_matter_p256_vectors.placeholder b/tests/data_files/spake2p_matter_p256_vectors.placeholder
+new file mode 100644
+index 0000000..594e0a6
+--- /dev/null
++++ b/tests/data_files/spake2p_matter_p256_vectors.placeholder
+@@ -0,0 +1,11 @@
++Placeholder for Matter SPAKE2+ P-256 vectors.
++
++The protocol engine patch should replace this with deterministic vectors that
++exercise:
++- Matter draft-02 transcript and key schedule
++- shareP/shareV generation
++- confirmP/confirmV verification
++- omitted context versus explicit empty context
++
++The implementation must use PSA_PAKE_STEP_CONFIRM for confirmation steps..
++Do not introduce non-existent confirmation-step aliases.
+diff --git a/tests/suites/test_suite_psa_crypto_spake2p.data b/tests/suites/test_suite_psa_crypto_spake2p.data
+new file mode 100644
+index 0000000..684f038
+--- /dev/null
++++ b/tests/suites/test_suite_psa_crypto_spake2p.data
+@@ -0,0 +1,2 @@
++PSA SPAKE2+ Matter size macros
++spake2p_matter_size_macros:
+diff --git a/tests/suites/test_suite_psa_crypto_spake2p.function b/tests/suites/test_suite_psa_crypto_spake2p.function
+new file mode 100644
+index 0000000..5de14bd
+--- /dev/null
++++ b/tests/suites/test_suite_psa_crypto_spake2p.function
+@@ -0,0 +1,26 @@
++/* BEGIN_HEADER */
++#include "psa/crypto.h"
++#include "psa/crypto_extra.h"
++/* END_HEADER */
++
++/* BEGIN_CASE */
++void spake2p_matter_size_macros( void )
++{
++    psa_pake_primitive_t p256 = PSA_PAKE_PRIMITIVE(
++        PSA_PAKE_PRIMITIVE_TYPE_ECC, PSA_ECC_FAMILY_SECP_R1, 256);
++
++    TEST_ASSERT( PSA_ALG_IS_SPAKE2P( PSA_ALG_SPAKE2P_MATTER ) );
++    TEST_EQUAL( 65, PSA_PAKE_OUTPUT_SIZE( PSA_ALG_SPAKE2P_MATTER,
++                                          p256,
++                                          PSA_PAKE_STEP_KEY_SHARE ) );
++    TEST_EQUAL( 32, PSA_PAKE_OUTPUT_SIZE( PSA_ALG_SPAKE2P_MATTER,
++                                          p256,
++                                          PSA_PAKE_STEP_CONFIRM ) );
++    TEST_EQUAL( 65, PSA_PAKE_INPUT_SIZE( PSA_ALG_SPAKE2P_MATTER,
++                                         p256,
++                                         PSA_PAKE_STEP_KEY_SHARE ) );
++    TEST_EQUAL( 32, PSA_PAKE_INPUT_SIZE( PSA_ALG_SPAKE2P_MATTER,
++                                         p256,
++                                         PSA_PAKE_STEP_CONFIRM ) );
++}
++/* END_CASE */
+-- 
+2.47.3
+

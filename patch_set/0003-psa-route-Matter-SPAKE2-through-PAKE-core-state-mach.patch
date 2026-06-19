@@ -1,0 +1,581 @@
+From 062dbe88c6d1dcd67b50203c8d8a4ff21ae36e8c Mon Sep 17 00:00:00 2001
+From: tester <test@example.com>
+Date: Fri, 8 May 2026 19:36:54 +0000
+Subject: [PATCH 3/5] psa: route Matter SPAKE2+ through PAKE core state machine
+
+---
+ core/psa_crypto.c          | 349 +++++++++++++++++++++++++++++++++----
+ include/psa/crypto_extra.h |  27 ++-
+ 2 files changed, 339 insertions(+), 37 deletions(-)
+
+diff --git a/core/psa_crypto.c b/core/psa_crypto.c
+index 28d0197..8fd4fa5 100644
+--- a/core/psa_crypto.c
++++ b/core/psa_crypto.c
+@@ -9131,20 +9131,43 @@ static psa_status_t psa_pake_set_password_key(
+ 
+     type = psa_get_key_type(&slot->attr);
+ 
+-    if (type != PSA_KEY_TYPE_PASSWORD &&
+-        type != PSA_KEY_TYPE_PASSWORD_HASH) {
+-        status = PSA_ERROR_INVALID_ARGUMENT;
+-        goto exit;
++    if (PSA_ALG_IS_JPAKE(operation->alg)) {
++        if (type != PSA_KEY_TYPE_PASSWORD &&
++            type != PSA_KEY_TYPE_PASSWORD_HASH) {
++            status = PSA_ERROR_INVALID_ARGUMENT;
++            goto exit;
++        }
++
++        operation->data.inputs.password = mbedtls_calloc(1, slot->key.bytes);
++        if (operation->data.inputs.password == NULL) {
++            status = PSA_ERROR_INSUFFICIENT_MEMORY;
++            goto exit;
++        }
++
++        memcpy(operation->data.inputs.password, slot->key.data, slot->key.bytes);
++        operation->data.inputs.password_len = slot->key.bytes;
+     }
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    else if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        if (!PSA_KEY_TYPE_IS_SPAKE2P(type)) {
++            status = PSA_ERROR_INVALID_ARGUMENT;
++            goto exit;
++        }
+ 
+-    operation->data.inputs.password = mbedtls_calloc(1, slot->key.bytes);
+-    if (operation->data.inputs.password == NULL) {
+-        status = PSA_ERROR_INSUFFICIENT_MEMORY;
++        operation->data.inputs.key = mbedtls_calloc(1, slot->key.bytes);
++        if (operation->data.inputs.key == NULL) {
++            status = PSA_ERROR_INSUFFICIENT_MEMORY;
++            goto exit;
++        }
++
++        memcpy(operation->data.inputs.key, slot->key.data, slot->key.bytes);
++        operation->data.inputs.key_len = slot->key.bytes;
++    }
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
++    else {
++        status = PSA_ERROR_NOT_SUPPORTED;
+         goto exit;
+     }
+-
+-    memcpy(operation->data.inputs.password, slot->key.data, slot->key.bytes);
+-    operation->data.inputs.password_len = slot->key.bytes;
+     operation->data.inputs.attributes = slot->attr;
+ 
+ exit:
+@@ -9192,6 +9215,24 @@ psa_status_t psa_pake_setup(
+         computation_stage->step = PSA_PAKE_STEP_KEY_SHARE;
+     } else
+ #endif /* PSA_WANT_ALG_JPAKE */
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        psa_spake2p_computation_stage_t *computation_stage =
++            &operation->computation_stage.spake2p;
++
++        if (cipher_suite->type != PSA_PAKE_PRIMITIVE_TYPE_ECC ||
++            cipher_suite->family != PSA_ECC_FAMILY_SECP_R1 ||
++            cipher_suite->bits != 256 ||
++            cipher_suite->key_confirmation != PSA_PAKE_CONFIRMED_KEY) {
++            status = PSA_ERROR_NOT_SUPPORTED;
++            goto exit;
++        }
++
++        memset(computation_stage, 0, sizeof(*computation_stage));
++        computation_stage->role = PSA_PAKE_ROLE_NONE;
++        computation_stage->phase = PSA_SPAKE2P_PHASE_INIT;
++    } else
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
+     {
+         status = PSA_ERROR_NOT_SUPPORTED;
+         goto exit;
+@@ -9218,26 +9259,29 @@ psa_status_t psa_pake_set_user(
+         goto exit;
+     }
+ 
+-    if (user_id_len == 0) {
++    if (user_id_len == 0 && operation->alg != PSA_ALG_SPAKE2P_MATTER) {
+         status = PSA_ERROR_INVALID_ARGUMENT;
+         goto exit;
+     }
+ 
+-    if (operation->data.inputs.user_len != 0) {
++    if ((operation->data.inputs.flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_USER) != 0) {
+         status = PSA_ERROR_BAD_STATE;
+         goto exit;
+     }
+ 
+-    operation->data.inputs.user = mbedtls_calloc(1, user_id_len);
+-    if (operation->data.inputs.user == NULL) {
+-        status = PSA_ERROR_INSUFFICIENT_MEMORY;
+-        goto exit;
+-    }
++    if (user_id_len != 0) {
++        operation->data.inputs.user = mbedtls_calloc(1, user_id_len);
++        if (operation->data.inputs.user == NULL) {
++            status = PSA_ERROR_INSUFFICIENT_MEMORY;
++            goto exit;
++        }
+ 
+-    LOCAL_INPUT_ALLOC(user_id_external, user_id_len, user_id);
++        LOCAL_INPUT_ALLOC(user_id_external, user_id_len, user_id);
+ 
+-    memcpy(operation->data.inputs.user, user_id, user_id_len);
++        memcpy(operation->data.inputs.user, user_id, user_id_len);
++    }
+     operation->data.inputs.user_len = user_id_len;
++    operation->data.inputs.flags |= PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_USER;
+ 
+     status = PSA_SUCCESS;
+ 
+@@ -9262,26 +9306,29 @@ psa_status_t psa_pake_set_peer(
+         goto exit;
+     }
+ 
+-    if (peer_id_len == 0) {
++    if (peer_id_len == 0 && operation->alg != PSA_ALG_SPAKE2P_MATTER) {
+         status = PSA_ERROR_INVALID_ARGUMENT;
+         goto exit;
+     }
+ 
+-    if (operation->data.inputs.peer_len != 0) {
++    if ((operation->data.inputs.flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_PEER) != 0) {
+         status = PSA_ERROR_BAD_STATE;
+         goto exit;
+     }
+ 
+-    operation->data.inputs.peer = mbedtls_calloc(1, peer_id_len);
+-    if (operation->data.inputs.peer == NULL) {
+-        status = PSA_ERROR_INSUFFICIENT_MEMORY;
+-        goto exit;
+-    }
++    if (peer_id_len != 0) {
++        operation->data.inputs.peer = mbedtls_calloc(1, peer_id_len);
++        if (operation->data.inputs.peer == NULL) {
++            status = PSA_ERROR_INSUFFICIENT_MEMORY;
++            goto exit;
++        }
+ 
+-    LOCAL_INPUT_ALLOC(peer_id_external, peer_id_len, peer_id);
++        LOCAL_INPUT_ALLOC(peer_id_external, peer_id_len, peer_id);
+ 
+-    memcpy(operation->data.inputs.peer, peer_id, peer_id_len);
++        memcpy(operation->data.inputs.peer, peer_id, peer_id_len);
++    }
+     operation->data.inputs.peer_len = peer_id_len;
++    operation->data.inputs.flags |= PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_PEER;
+ 
+     status = PSA_SUCCESS;
+ 
+@@ -9312,6 +9359,26 @@ psa_status_t psa_pake_set_role(
+         status = PSA_ERROR_INVALID_ARGUMENT;
+     } else
+ #endif
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        if (role != PSA_PAKE_ROLE_CLIENT && role != PSA_PAKE_ROLE_SERVER) {
++            status = PSA_ERROR_INVALID_ARGUMENT;
++            goto exit;
++        }
++        if ((operation->data.inputs.flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_ROLE) != 0) {
++            status = PSA_ERROR_BAD_STATE;
++            goto exit;
++        }
++
++        operation->data.inputs.role = role;
++        operation->data.inputs.flags |= PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_ROLE;
++        operation->computation_stage.spake2p.role = role;
++        operation->computation_stage.spake2p.phase =
++            (role == PSA_PAKE_ROLE_CLIENT) ?
++            PSA_SPAKE2P_PHASE_INIT : PSA_SPAKE2P_PHASE_SERVER_EXPECT_PEER_SHARE;
++        return PSA_SUCCESS;
++    } else
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
+     {
+         (void) role;
+         status = PSA_ERROR_NOT_SUPPORTED;
+@@ -9324,12 +9391,50 @@ exit:
+ 
+ psa_status_t psa_pake_set_context(
+     psa_pake_operation_t *operation,
+-    const uint8_t *context, size_t context_len)
++    const uint8_t *context_external, size_t context_len)
+ {
+-    (void) operation;
+-    (void) context;
+-    (void) context_len;
+-    return PSA_ERROR_NOT_SUPPORTED;
++    psa_status_t status = PSA_ERROR_CORRUPTION_DETECTED;
++    LOCAL_INPUT_DECLARE(context_external, context);
++
++    if (operation->stage != PSA_PAKE_OPERATION_STAGE_COLLECT_INPUTS) {
++        status = PSA_ERROR_BAD_STATE;
++        goto exit;
++    }
++
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        if ((operation->data.inputs.flags &
++             PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_CONTEXT) != 0) {
++            status = PSA_ERROR_BAD_STATE;
++            goto exit;
++        }
++
++        if (context_len != 0) {
++            operation->data.inputs.context = mbedtls_calloc(1, context_len);
++            if (operation->data.inputs.context == NULL) {
++                status = PSA_ERROR_INSUFFICIENT_MEMORY;
++                goto exit;
++            }
++
++            LOCAL_INPUT_ALLOC(context_external, context_len, context);
++            memcpy(operation->data.inputs.context, context, context_len);
++        }
++        operation->data.inputs.context_len = context_len;
++        operation->data.inputs.flags |= PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_CONTEXT;
++        status = PSA_SUCCESS;
++    } else
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
++    {
++        (void) context_len;
++        status = PSA_ERROR_NOT_SUPPORTED;
++    }
++
++exit:
++    LOCAL_INPUT_FREE(context_external, context);
++    if (status != PSA_SUCCESS) {
++        psa_pake_abort(operation);
++    }
++    return status;
+ }
+ 
+ /* Auxiliary function to convert core computation stage to single driver step. */
+@@ -9369,16 +9474,27 @@ static psa_status_t psa_pake_complete_inputs(
+        with the driver context which will be setup by the driver. */
+     psa_crypto_driver_pake_inputs_t inputs = operation->data.inputs;
+ 
+-    if (inputs.password_len == 0) {
++    if (PSA_ALG_IS_JPAKE(operation->alg) && inputs.password_len == 0) {
+         return PSA_ERROR_BAD_STATE;
+     }
+ 
+     if (PSA_ALG_IS_JPAKE(operation->alg)) {
+-        if (inputs.user_len == 0 || inputs.peer_len == 0) {
++        if ((inputs.flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_USER) == 0 ||
++            (inputs.flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_PEER) == 0 ||
++            inputs.user_len == 0 || inputs.peer_len == 0) {
+             return PSA_ERROR_BAD_STATE;
+         }
+     }
+ 
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        if (inputs.key_len == 0 ||
++            (inputs.flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_ROLE) == 0) {
++            return PSA_ERROR_BAD_STATE;
++        }
++    }
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
++
+     /* Clear driver context */
+     mbedtls_platform_zeroize(&operation->data, sizeof(operation->data));
+ 
+@@ -9386,10 +9502,12 @@ static psa_status_t psa_pake_complete_inputs(
+ 
+     /* Driver is responsible for creating its own copy of the password. */
+     mbedtls_zeroize_and_free(inputs.password, inputs.password_len);
++    mbedtls_zeroize_and_free(inputs.key, inputs.key_len);
+ 
+-    /* User and peer are translated to role. */
++    /* The driver is responsible for copying user, peer and context as needed. */
+     mbedtls_free(inputs.user);
+     mbedtls_free(inputs.peer);
++    mbedtls_free(inputs.context);
+ 
+     if (status == PSA_SUCCESS) {
+ #if defined(PSA_WANT_ALG_JPAKE)
+@@ -9397,6 +9515,11 @@ static psa_status_t psa_pake_complete_inputs(
+             operation->stage = PSA_PAKE_OPERATION_STAGE_COMPUTATION;
+         } else
+ #endif /* PSA_WANT_ALG_JPAKE */
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++        if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++            operation->stage = PSA_PAKE_OPERATION_STAGE_COMPUTATION;
++        } else
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
+         {
+             status = PSA_ERROR_NOT_SUPPORTED;
+         }
+@@ -9481,6 +9604,115 @@ static psa_status_t psa_jpake_epilogue(
+ 
+ #endif /* PSA_WANT_ALG_JPAKE */
+ 
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++static psa_status_t psa_spake2p_prologue(
++    psa_pake_operation_t *operation,
++    psa_pake_step_t step,
++    psa_jpake_io_mode_t io_mode,
++    psa_crypto_driver_pake_step_t *driver_step)
++{
++    psa_spake2p_computation_stage_t *stage =
++        &operation->computation_stage.spake2p;
++
++    if (step != PSA_PAKE_STEP_KEY_SHARE &&
++        step != PSA_PAKE_STEP_CONFIRM) {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++
++    if (stage->role == PSA_PAKE_ROLE_CLIENT) {
++        if (io_mode == PSA_JPAKE_OUTPUT &&
++            step == PSA_PAKE_STEP_KEY_SHARE &&
++            stage->phase == PSA_SPAKE2P_PHASE_INIT) {
++            *driver_step = PSA_SPAKE2P_STEP_KEY_SHARE;
++            return PSA_SUCCESS;
++        }
++        if (io_mode == PSA_JPAKE_INPUT &&
++            step == PSA_PAKE_STEP_KEY_SHARE &&
++            stage->phase == PSA_SPAKE2P_PHASE_CLIENT_EXPECT_PEER_SHARE) {
++            *driver_step = PSA_SPAKE2P_STEP_KEY_SHARE;
++            return PSA_SUCCESS;
++        }
++        if (io_mode == PSA_JPAKE_INPUT &&
++            step == PSA_PAKE_STEP_CONFIRM &&
++            stage->phase == PSA_SPAKE2P_PHASE_CLIENT_EXPECT_PEER_CONFIRM) {
++            *driver_step = PSA_SPAKE2P_STEP_CONFIRM;
++            return PSA_SUCCESS;
++        }
++        if (io_mode == PSA_JPAKE_OUTPUT &&
++            step == PSA_PAKE_STEP_CONFIRM &&
++            stage->phase == PSA_SPAKE2P_PHASE_CLIENT_EXPECT_OWN_CONFIRM) {
++            *driver_step = PSA_SPAKE2P_STEP_CONFIRM;
++            return PSA_SUCCESS;
++        }
++    } else if (stage->role == PSA_PAKE_ROLE_SERVER) {
++        if (io_mode == PSA_JPAKE_INPUT &&
++            step == PSA_PAKE_STEP_KEY_SHARE &&
++            stage->phase == PSA_SPAKE2P_PHASE_SERVER_EXPECT_PEER_SHARE) {
++            *driver_step = PSA_SPAKE2P_STEP_KEY_SHARE;
++            return PSA_SUCCESS;
++        }
++        if (io_mode == PSA_JPAKE_OUTPUT &&
++            step == PSA_PAKE_STEP_KEY_SHARE &&
++            stage->phase == PSA_SPAKE2P_PHASE_SERVER_EXPECT_OWN_SHARE) {
++            *driver_step = PSA_SPAKE2P_STEP_KEY_SHARE;
++            return PSA_SUCCESS;
++        }
++        if (io_mode == PSA_JPAKE_OUTPUT &&
++            step == PSA_PAKE_STEP_CONFIRM &&
++            stage->phase == PSA_SPAKE2P_PHASE_SERVER_EXPECT_OWN_CONFIRM) {
++            *driver_step = PSA_SPAKE2P_STEP_CONFIRM;
++            return PSA_SUCCESS;
++        }
++        if (io_mode == PSA_JPAKE_INPUT &&
++            step == PSA_PAKE_STEP_CONFIRM &&
++            stage->phase == PSA_SPAKE2P_PHASE_SERVER_EXPECT_PEER_CONFIRM) {
++            *driver_step = PSA_SPAKE2P_STEP_CONFIRM;
++            return PSA_SUCCESS;
++        }
++    }
++
++    return PSA_ERROR_BAD_STATE;
++}
++
++static void psa_spake2p_epilogue(
++    psa_pake_operation_t *operation,
++    psa_jpake_io_mode_t io_mode)
++{
++    psa_spake2p_computation_stage_t *stage =
++        &operation->computation_stage.spake2p;
++
++    if (stage->role == PSA_PAKE_ROLE_CLIENT) {
++        if (io_mode == PSA_JPAKE_OUTPUT &&
++            stage->phase == PSA_SPAKE2P_PHASE_INIT) {
++            stage->phase = PSA_SPAKE2P_PHASE_CLIENT_EXPECT_PEER_SHARE;
++        } else if (io_mode == PSA_JPAKE_INPUT &&
++                   stage->phase == PSA_SPAKE2P_PHASE_CLIENT_EXPECT_PEER_SHARE) {
++            stage->phase = PSA_SPAKE2P_PHASE_CLIENT_EXPECT_PEER_CONFIRM;
++        } else if (io_mode == PSA_JPAKE_INPUT &&
++                   stage->phase == PSA_SPAKE2P_PHASE_CLIENT_EXPECT_PEER_CONFIRM) {
++            stage->phase = PSA_SPAKE2P_PHASE_CLIENT_EXPECT_OWN_CONFIRM;
++        } else if (io_mode == PSA_JPAKE_OUTPUT &&
++                   stage->phase == PSA_SPAKE2P_PHASE_CLIENT_EXPECT_OWN_CONFIRM) {
++            stage->phase = PSA_SPAKE2P_PHASE_FINISHED;
++        }
++    } else if (stage->role == PSA_PAKE_ROLE_SERVER) {
++        if (io_mode == PSA_JPAKE_INPUT &&
++            stage->phase == PSA_SPAKE2P_PHASE_SERVER_EXPECT_PEER_SHARE) {
++            stage->phase = PSA_SPAKE2P_PHASE_SERVER_EXPECT_OWN_SHARE;
++        } else if (io_mode == PSA_JPAKE_OUTPUT &&
++                   stage->phase == PSA_SPAKE2P_PHASE_SERVER_EXPECT_OWN_SHARE) {
++            stage->phase = PSA_SPAKE2P_PHASE_SERVER_EXPECT_OWN_CONFIRM;
++        } else if (io_mode == PSA_JPAKE_OUTPUT &&
++                   stage->phase == PSA_SPAKE2P_PHASE_SERVER_EXPECT_OWN_CONFIRM) {
++            stage->phase = PSA_SPAKE2P_PHASE_SERVER_EXPECT_PEER_CONFIRM;
++        } else if (io_mode == PSA_JPAKE_INPUT &&
++                   stage->phase == PSA_SPAKE2P_PHASE_SERVER_EXPECT_PEER_CONFIRM) {
++            stage->phase = PSA_SPAKE2P_PHASE_FINISHED;
++        }
++    }
++}
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
++
+ psa_status_t psa_pake_output(
+     psa_pake_operation_t *operation,
+     psa_pake_step_t step,
+@@ -9520,6 +9752,15 @@ psa_status_t psa_pake_output(
+             &operation->computation_stage.jpake);
+     } else
+ #endif /* PSA_WANT_ALG_JPAKE */
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        status = psa_spake2p_prologue(operation, step, PSA_JPAKE_OUTPUT,
++                                      &driver_step);
++        if (status != PSA_SUCCESS) {
++            goto exit;
++        }
++    } else
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
+     {
+         (void) step;
+         status = PSA_ERROR_NOT_SUPPORTED;
+@@ -9543,6 +9784,11 @@ psa_status_t psa_pake_output(
+         }
+     } else
+ #endif /* PSA_WANT_ALG_JPAKE */
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        psa_spake2p_epilogue(operation, PSA_JPAKE_OUTPUT);
++    } else
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
+     {
+         status = PSA_ERROR_NOT_SUPPORTED;
+         goto exit;
+@@ -9596,6 +9842,15 @@ psa_status_t psa_pake_input(
+             &operation->computation_stage.jpake);
+     } else
+ #endif /* PSA_WANT_ALG_JPAKE */
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        status = psa_spake2p_prologue(operation, step, PSA_JPAKE_INPUT,
++                                      &driver_step);
++        if (status != PSA_SUCCESS) {
++            goto exit;
++        }
++    } else
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
+     {
+         (void) step;
+         status = PSA_ERROR_NOT_SUPPORTED;
+@@ -9618,6 +9873,11 @@ psa_status_t psa_pake_input(
+         }
+     } else
+ #endif /* PSA_WANT_ALG_JPAKE */
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        psa_spake2p_epilogue(operation, PSA_JPAKE_INPUT);
++    } else
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
+     {
+         status = PSA_ERROR_NOT_SUPPORTED;
+         goto exit;
+@@ -9655,6 +9915,16 @@ psa_status_t psa_pake_get_shared_key(psa_pake_operation_t *operation,
+         }
+     } else
+ #endif /* PSA_WANT_ALG_JPAKE */
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++    if (operation->alg == PSA_ALG_SPAKE2P_MATTER) {
++        psa_spake2p_computation_stage_t *computation_stage =
++            &operation->computation_stage.spake2p;
++        if (computation_stage->phase != PSA_SPAKE2P_PHASE_FINISHED) {
++            status = PSA_ERROR_BAD_STATE;
++            goto exit;
++        }
++    } else
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
+     {
+         status = PSA_ERROR_NOT_SUPPORTED;
+         goto exit;
+@@ -9696,12 +9966,19 @@ psa_status_t psa_pake_abort(
+             mbedtls_zeroize_and_free(operation->data.inputs.password,
+                                      operation->data.inputs.password_len);
+         }
++        if (operation->data.inputs.key != NULL) {
++            mbedtls_zeroize_and_free(operation->data.inputs.key,
++                                     operation->data.inputs.key_len);
++        }
+         if (operation->data.inputs.user != NULL) {
+             mbedtls_free(operation->data.inputs.user);
+         }
+         if (operation->data.inputs.peer != NULL) {
+             mbedtls_free(operation->data.inputs.peer);
+         }
++        if (operation->data.inputs.context != NULL) {
++            mbedtls_free(operation->data.inputs.context);
++        }
+     }
+     memset(operation, 0, sizeof(psa_pake_operation_t));
+ 
+diff --git a/include/psa/crypto_extra.h b/include/psa/crypto_extra.h
+index 5dcf4c2..8c1ac4a 100644
+--- a/include/psa/crypto_extra.h
++++ b/include/psa/crypto_extra.h
+@@ -1213,7 +1213,9 @@ typedef enum psa_crypto_driver_pake_step {
+     PSA_JPAKE_X2S_STEP_ZK_PROOF   = 9,  /* Round 2: output Schnorr NIZKP proof for the X2S key (our key) */
+     PSA_JPAKE_X4S_STEP_KEY_SHARE  = 10, /* Round 2: input X4S key (from peer) */
+     PSA_JPAKE_X4S_STEP_ZK_PUBLIC  = 11, /* Round 2: input Schnorr NIZKP public key for the X4S key (from peer) */
+-    PSA_JPAKE_X4S_STEP_ZK_PROOF   = 12  /* Round 2: input Schnorr NIZKP proof for the X4S key (from peer) */
++    PSA_JPAKE_X4S_STEP_ZK_PROOF   = 12, /* Round 2: input Schnorr NIZKP proof for the X4S key (from peer) */
++    PSA_SPAKE2P_STEP_KEY_SHARE    = 32, /* SPAKE2+ key-share input or output. */
++    PSA_SPAKE2P_STEP_CONFIRM      = 33  /* SPAKE2+ explicit key confirmation. */
+ } psa_crypto_driver_pake_step_t;
+ 
+ typedef enum psa_jpake_round {
+@@ -1245,6 +1247,23 @@ struct psa_jpake_computation_stage_s {
+ #define PSA_JPAKE_EXPECTED_OUTPUTS(round) ((round) == PSA_JPAKE_FINISHED ? 0 : \
+                                            ((round) == PSA_JPAKE_FIRST ? 2 : 1))
+ 
++typedef enum psa_spake2p_phase {
++    PSA_SPAKE2P_PHASE_INIT = 0,
++    PSA_SPAKE2P_PHASE_CLIENT_EXPECT_PEER_SHARE = 1,
++    PSA_SPAKE2P_PHASE_CLIENT_EXPECT_PEER_CONFIRM = 2,
++    PSA_SPAKE2P_PHASE_CLIENT_EXPECT_OWN_CONFIRM = 3,
++    PSA_SPAKE2P_PHASE_SERVER_EXPECT_PEER_SHARE = 10,
++    PSA_SPAKE2P_PHASE_SERVER_EXPECT_OWN_SHARE = 11,
++    PSA_SPAKE2P_PHASE_SERVER_EXPECT_OWN_CONFIRM = 12,
++    PSA_SPAKE2P_PHASE_SERVER_EXPECT_PEER_CONFIRM = 13,
++    PSA_SPAKE2P_PHASE_FINISHED = 255
++} psa_spake2p_phase_t;
++
++struct psa_spake2p_computation_stage_s {
++    psa_spake2p_phase_t MBEDTLS_PRIVATE(phase);
++    psa_pake_role_t MBEDTLS_PRIVATE(role);
++};
++
+ struct psa_pake_operation_s {
+ #if defined(MBEDTLS_PSA_CRYPTO_CLIENT) && !defined(MBEDTLS_PSA_CRYPTO_C)
+     mbedtls_psa_client_handle_t handle;
+@@ -1268,6 +1287,9 @@ struct psa_pake_operation_s {
+         uint8_t MBEDTLS_PRIVATE(dummy);
+ #if defined(PSA_WANT_ALG_JPAKE)
+         struct psa_jpake_computation_stage_s MBEDTLS_PRIVATE(jpake);
++#endif
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++        struct psa_spake2p_computation_stage_s MBEDTLS_PRIVATE(spake2p);
+ #endif
+     } MBEDTLS_PRIVATE(computation_stage);
+     union {
+@@ -1421,6 +1443,9 @@ typedef struct psa_crypto_driver_pake_inputs_s psa_crypto_driver_pake_inputs_t;
+ /** The type of computation stage for J-PAKE operations. */
+ typedef struct psa_jpake_computation_stage_s psa_jpake_computation_stage_t;
+ 
++/** The type of computation stage for SPAKE2+ operations. */
++typedef struct psa_spake2p_computation_stage_s psa_spake2p_computation_stage_t;
++
+ /** Return an initial value for a PAKE operation object.
+  */
+ static psa_pake_operation_t psa_pake_operation_init(void);
+-- 
+2.47.3
+

@@ -1,0 +1,233 @@
+From 528db9837d99f4878e563b89ec7b7c0c88a8f1a0 Mon Sep 17 00:00:00 2001
+From: tester <test@example.com>
+Date: Fri, 8 May 2026 19:34:40 +0000
+Subject: [PATCH 2/5] psa: extend PAKE driver inputs for augmented PAKEs
+
+---
+ core/psa_crypto.c          | 93 +++++++++++++++++++++++++++++++++++---
+ include/psa/crypto_extra.h | 40 ++++++++++++++++
+ 2 files changed, 127 insertions(+), 6 deletions(-)
+
+diff --git a/core/psa_crypto.c b/core/psa_crypto.c
+index 271ed06..28d0197 100644
+--- a/core/psa_crypto.c
++++ b/core/psa_crypto.c
+@@ -8952,11 +8952,42 @@ psa_status_t psa_crypto_driver_pake_get_password(
+     return PSA_SUCCESS;
+ }
+ 
++psa_status_t psa_crypto_driver_pake_get_key_len(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    size_t *key_len)
++{
++    if (inputs->key_len == 0) {
++        return PSA_ERROR_BAD_STATE;
++    }
++
++    *key_len = inputs->key_len;
++
++    return PSA_SUCCESS;
++}
++
++psa_status_t psa_crypto_driver_pake_get_key(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    uint8_t *buffer, size_t buffer_size, size_t *buffer_length)
++{
++    if (inputs->key_len == 0) {
++        return PSA_ERROR_BAD_STATE;
++    }
++
++    if (buffer_size < inputs->key_len) {
++        return PSA_ERROR_BUFFER_TOO_SMALL;
++    }
++
++    memcpy(buffer, inputs->key, inputs->key_len);
++    *buffer_length = inputs->key_len;
++
++    return PSA_SUCCESS;
++}
++
+ psa_status_t psa_crypto_driver_pake_get_user_len(
+     const psa_crypto_driver_pake_inputs_t *inputs,
+     size_t *user_len)
+ {
+-    if (inputs->user_len == 0) {
++    if ((inputs->flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_USER) == 0) {
+         return PSA_ERROR_BAD_STATE;
+     }
+ 
+@@ -8969,7 +9000,7 @@ psa_status_t psa_crypto_driver_pake_get_user(
+     const psa_crypto_driver_pake_inputs_t *inputs,
+     uint8_t *user_id, size_t user_id_size, size_t *user_id_len)
+ {
+-    if (inputs->user_len == 0) {
++    if ((inputs->flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_USER) == 0) {
+         return PSA_ERROR_BAD_STATE;
+     }
+ 
+@@ -8977,7 +9008,9 @@ psa_status_t psa_crypto_driver_pake_get_user(
+         return PSA_ERROR_BUFFER_TOO_SMALL;
+     }
+ 
+-    memcpy(user_id, inputs->user, inputs->user_len);
++    if (inputs->user_len != 0) {
++        memcpy(user_id, inputs->user, inputs->user_len);
++    }
+     *user_id_len = inputs->user_len;
+ 
+     return PSA_SUCCESS;
+@@ -8987,7 +9020,7 @@ psa_status_t psa_crypto_driver_pake_get_peer_len(
+     const psa_crypto_driver_pake_inputs_t *inputs,
+     size_t *peer_len)
+ {
+-    if (inputs->peer_len == 0) {
++    if ((inputs->flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_PEER) == 0) {
+         return PSA_ERROR_BAD_STATE;
+     }
+ 
+@@ -9000,7 +9033,7 @@ psa_status_t psa_crypto_driver_pake_get_peer(
+     const psa_crypto_driver_pake_inputs_t *inputs,
+     uint8_t *peer_id, size_t peer_id_size, size_t *peer_id_length)
+ {
+-    if (inputs->peer_len == 0) {
++    if ((inputs->flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_PEER) == 0) {
+         return PSA_ERROR_BAD_STATE;
+     }
+ 
+@@ -9008,12 +9041,60 @@ psa_status_t psa_crypto_driver_pake_get_peer(
+         return PSA_ERROR_BUFFER_TOO_SMALL;
+     }
+ 
+-    memcpy(peer_id, inputs->peer, inputs->peer_len);
++    if (inputs->peer_len != 0) {
++        memcpy(peer_id, inputs->peer, inputs->peer_len);
++    }
+     *peer_id_length = inputs->peer_len;
+ 
+     return PSA_SUCCESS;
+ }
+ 
++psa_status_t psa_crypto_driver_pake_get_role(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    psa_pake_role_t *role)
++{
++    if ((inputs->flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_ROLE) == 0) {
++        return PSA_ERROR_BAD_STATE;
++    }
++
++    *role = inputs->role;
++
++    return PSA_SUCCESS;
++}
++
++psa_status_t psa_crypto_driver_pake_get_context_len(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    size_t *context_len)
++{
++    if ((inputs->flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_CONTEXT) == 0) {
++        return PSA_ERROR_BAD_STATE;
++    }
++
++    *context_len = inputs->context_len;
++
++    return PSA_SUCCESS;
++}
++
++psa_status_t psa_crypto_driver_pake_get_context(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    uint8_t *context, size_t context_size, size_t *context_length)
++{
++    if ((inputs->flags & PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_CONTEXT) == 0) {
++        return PSA_ERROR_BAD_STATE;
++    }
++
++    if (context_size < inputs->context_len) {
++        return PSA_ERROR_BUFFER_TOO_SMALL;
++    }
++
++    if (inputs->context_len != 0) {
++        memcpy(context, inputs->context, inputs->context_len);
++    }
++    *context_length = inputs->context_len;
++
++    return PSA_SUCCESS;
++}
++
+ psa_status_t psa_crypto_driver_pake_get_cipher_suite(
+     const psa_crypto_driver_pake_inputs_t *inputs,
+     psa_pake_cipher_suite_t *cipher_suite)
+diff --git a/include/psa/crypto_extra.h b/include/psa/crypto_extra.h
+index 791123a..5dcf4c2 100644
+--- a/include/psa/crypto_extra.h
++++ b/include/psa/crypto_extra.h
+@@ -1178,13 +1178,24 @@ struct psa_pake_cipher_suite_s {
+     uint32_t key_confirmation;
+ };
+ 
++#define PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_USER       ((uint32_t) 0x00000001)
++#define PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_PEER       ((uint32_t) 0x00000002)
++#define PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_CONTEXT    ((uint32_t) 0x00000004)
++#define PSA_CRYPTO_DRIVER_PAKE_INPUT_HAS_ROLE       ((uint32_t) 0x00000008)
++
+ struct psa_crypto_driver_pake_inputs_s {
+     uint8_t *MBEDTLS_PRIVATE(password);
+     size_t MBEDTLS_PRIVATE(password_len);
++    uint8_t *MBEDTLS_PRIVATE(key);
++    size_t MBEDTLS_PRIVATE(key_len);
+     uint8_t *MBEDTLS_PRIVATE(user);
+     size_t MBEDTLS_PRIVATE(user_len);
+     uint8_t *MBEDTLS_PRIVATE(peer);
+     size_t MBEDTLS_PRIVATE(peer_len);
++    uint8_t *MBEDTLS_PRIVATE(context);
++    size_t MBEDTLS_PRIVATE(context_len);
++    psa_pake_role_t MBEDTLS_PRIVATE(role);
++    uint32_t MBEDTLS_PRIVATE(flags);
+     psa_key_attributes_t MBEDTLS_PRIVATE(attributes);
+     struct psa_pake_cipher_suite_s MBEDTLS_PRIVATE(cipher_suite);
+ };
+@@ -1444,6 +1455,20 @@ psa_status_t psa_crypto_driver_pake_get_password(
+     const psa_crypto_driver_pake_inputs_t *inputs,
+     uint8_t *buffer, size_t buffer_size, size_t *buffer_length);
+ 
++/** Get the length of the PAKE key material in bytes from given inputs.
++ *
++ * This is used by augmented PAKEs such as SPAKE2+, where the input key is
++ * not a raw password but verifier-side or prover-side SPAKE2+ key material.
++ */
++psa_status_t psa_crypto_driver_pake_get_key_len(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    size_t *key_len);
++
++/** Get the PAKE key material from given inputs. */
++psa_status_t psa_crypto_driver_pake_get_key(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    uint8_t *buffer, size_t buffer_size, size_t *buffer_length);
++
+ /** Get the length of the user id in bytes from given inputs.
+  *
+  * \param[in]  inputs           Operation inputs.
+@@ -1508,6 +1533,21 @@ psa_status_t psa_crypto_driver_pake_get_peer(
+     const psa_crypto_driver_pake_inputs_t *inputs,
+     uint8_t *peer_id, size_t peer_id_size, size_t *peer_id_length);
+ 
++/** Get the configured PAKE role from given inputs. */
++psa_status_t psa_crypto_driver_pake_get_role(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    psa_pake_role_t *role);
++
++/** Get the length of the optional PAKE context from given inputs. */
++psa_status_t psa_crypto_driver_pake_get_context_len(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    size_t *context_len);
++
++/** Get the optional PAKE context from given inputs. */
++psa_status_t psa_crypto_driver_pake_get_context(
++    const psa_crypto_driver_pake_inputs_t *inputs,
++    uint8_t *context, size_t context_size, size_t *context_length);
++
+ /** Get the cipher suite from given inputs.
+  *
+  * \param[in]  inputs           Operation inputs.
+-- 
+2.47.3
+

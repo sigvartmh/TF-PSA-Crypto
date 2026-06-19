@@ -1,0 +1,208 @@
+From 59dd225d91af0df0ba075c386b65b63c61f5b062 Mon Sep 17 00:00:00 2001
+From: tester <test@example.com>
+Date: Fri, 8 May 2026 19:33:50 +0000
+Subject: [PATCH 1/5] psa: introduce Matter SPAKE2+ configuration scaffolding
+
+---
+ .../crypto_adjust_config_enable_builtins.h    | 20 +++++-
+ include/psa/crypto_extra.h                    | 70 +++++++++++++------
+ .../private/crypto_adjust_config_derived.h    |  3 +-
+ scripts/data_files/config-options-current.txt |  1 +
+ 4 files changed, 69 insertions(+), 25 deletions(-)
+
+diff --git a/drivers/builtin/include/mbedtls/private/crypto_adjust_config_enable_builtins.h b/drivers/builtin/include/mbedtls/private/crypto_adjust_config_enable_builtins.h
+index 54792d3..d7cff17 100644
+--- a/drivers/builtin/include/mbedtls/private/crypto_adjust_config_enable_builtins.h
++++ b/drivers/builtin/include/mbedtls/private/crypto_adjust_config_enable_builtins.h
+@@ -72,7 +72,9 @@
+     (defined(PSA_WANT_ALG_ECDSA) && !defined(MBEDTLS_PSA_ACCEL_ALG_ECDSA)) || \
+     (defined(PSA_WANT_ALG_DETERMINISTIC_ECDSA) && \
+     !defined(MBEDTLS_PSA_ACCEL_ALG_DETERMINISTIC_ECDSA)) || \
+-    (defined(PSA_WANT_ALG_JPAKE) && !defined(MBEDTLS_PSA_ACCEL_ALG_JPAKE))
++    (defined(PSA_WANT_ALG_JPAKE) && !defined(MBEDTLS_PSA_ACCEL_ALG_JPAKE)) || \
++    (defined(PSA_WANT_ALG_SPAKE2P_MATTER) && \
++     !defined(MBEDTLS_PSA_ACCEL_ALG_SPAKE2P_MATTER))
+ #define MBEDTLS_PSA_ECC_ACCEL_INCOMPLETE_ALGS
+ #endif
+ 
+@@ -253,6 +255,22 @@
+ #endif /* missing accel */
+ #endif /* PSA_WANT_ALG_JPAKE */
+ 
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER)
++#if !defined(MBEDTLS_PSA_ACCEL_ALG_SPAKE2P_MATTER) || \
++    !defined(MBEDTLS_PSA_ACCEL_ECC_SECP_R1_256) || \
++    defined(MBEDTLS_PSA_ECC_ACCEL_INCOMPLETE_KEY_TYPES_BASIC)
++#define MBEDTLS_PSA_BUILTIN_PAKE 1
++#define MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P 1
++#define MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P_MATTER 1
++#define MBEDTLS_ECP_DP_SECP256R1_ENABLED
++#define MBEDTLS_BIGNUM_C
++#define MBEDTLS_ECP_C
++#define PSA_WANT_ALG_SHA_256 1
++#define PSA_WANT_ALG_HMAC 1
++#define PSA_WANT_ALG_HKDF 1
++#endif /* missing accel */
++#endif /* PSA_WANT_ALG_SPAKE2P_MATTER */
++
+ /* ECC: key types: enable built-ins as needed.
+  *
+  * We need the key type built-in:
+diff --git a/include/psa/crypto_extra.h b/include/psa/crypto_extra.h
+index cc887b0..791123a 100644
+--- a/include/psa/crypto_extra.h
++++ b/include/psa/crypto_extra.h
+@@ -735,14 +735,18 @@ psa_status_t mbedtls_psa_platform_get_builtin_key(
+ 
+ /** SPAKE2+ key pair.
+  *
+- * Not implemented yet.
++ * Public behaviour for this key type is intended to follow PSA Crypto 1.4
++ * for supported SPAKE2+ variants. Initial built-in support targets the
++ * Matter P-256 profile only.
+  */
+ #define PSA_KEY_TYPE_SPAKE2P_KEY_PAIR(curve)            \
+     (PSA_KEY_TYPE_SPAKE2P_KEY_PAIR_BASE | (curve))
+ 
+ /** SPAKE2+ public key.
+  *
+- * Not implemented yet.
++ * Public behaviour for this key type is intended to follow PSA Crypto 1.4
++ * for supported SPAKE2+ variants. Initial built-in support targets the
++ * Matter P-256 profile only.
+  */
+ #define PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY(curve)          \
+     (PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE | (curve))
+@@ -766,7 +770,7 @@ psa_status_t mbedtls_psa_platform_get_builtin_key(
+ 
+ /** SPAKE2+ algorithm using HMAC for key confirmation.
+  *
+- * Not implemented yet.
++ * Reserved for a future RFC 9383-compatible built-in implementation.
+  */
+ #define PSA_ALG_SPAKE2P_HMAC(hash_alg)                                  \
+     (PSA_ALG_SPAKE2P_HMAC_BASE | ((hash_alg) & (PSA_ALG_HASH_MASK)))
+@@ -775,7 +779,7 @@ psa_status_t mbedtls_psa_platform_get_builtin_key(
+ 
+ /** SPAKE2+ algorithm using CMAC for key confirmation.
+  *
+- * Not implemented yet.
++ * Reserved for a future RFC 9383-compatible built-in implementation.
+  */
+ #define PSA_ALG_SPAKE2P_CMAC_BASE               ((psa_algorithm_t) 0x0a000500)
+ #define PSA_ALG_SPAKE2P_CMAC(hash_alg)                          \
+@@ -785,7 +789,8 @@ psa_status_t mbedtls_psa_platform_get_builtin_key(
+ 
+ /** SPAKE2+ algorithm variant used by the Matter specification version 1.2.
+  *
+- * Not implemented yet.
++ * Public behaviour is intended to follow PSA Crypto 1.4. Initial built-in
++ * support targets the Matter P-256 profile only.
+  */
+ #define PSA_ALG_SPAKE2P_MATTER                  ((psa_algorithm_t) 0x0a000609)
+ 
+@@ -808,8 +813,9 @@ psa_status_t mbedtls_psa_platform_get_builtin_key(
+ 
+ /** \defgroup pake Password-authenticated key exchange (PAKE)
+  *
+- * This is a proposed PAKE interface for the PSA Crypto API. It is not part of
+- * the official PSA Crypto API yet.
++ * This PAKE interface predates the integration of PAKE into the PSA Crypto
++ * API. For supported algorithms, public behaviour should follow PSA Crypto
++ * 1.4.
+  *
+  * \note The content of this section is not part of the stable API and ABI
+  *       of Mbed TLS and may change arbitrarily from version to version.
+@@ -1042,14 +1048,23 @@ typedef uint32_t psa_pake_primitive_t;
+  *                      return 0.
+  */
+ #define PSA_PAKE_OUTPUT_SIZE(alg, primitive, output_step)               \
+-    (PSA_ALG_IS_JPAKE(alg) &&                                           \
+-     primitive == PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,      \
+-                                     PSA_ECC_FAMILY_SECP_R1, 256) ?    \
+-     (                                                                 \
+-         output_step == PSA_PAKE_STEP_KEY_SHARE ? 65 :                   \
+-         output_step == PSA_PAKE_STEP_ZK_PUBLIC ? 65 :                   \
+-         32                                                              \
+-     ) :                                                               \
++    ((primitive) == PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,     \
++                                       PSA_ECC_FAMILY_SECP_R1, 256) ?   \
++     (                                                                  \
++         PSA_ALG_IS_JPAKE(alg) ?                                        \
++         (                                                              \
++             (output_step) == PSA_PAKE_STEP_KEY_SHARE ? 65 :            \
++             (output_step) == PSA_PAKE_STEP_ZK_PUBLIC ? 65 :            \
++             32                                                         \
++         ) :                                                            \
++         (alg) == PSA_ALG_SPAKE2P_MATTER ?                              \
++         (                                                              \
++             (output_step) == PSA_PAKE_STEP_KEY_SHARE ? 65 :            \
++             (output_step) == PSA_PAKE_STEP_CONFIRM ? 32 :              \
++             0                                                          \
++         ) :                                                            \
++         0                                                              \
++     ) :                                                                \
+      0)
+ 
+ /** A sufficient input buffer size for psa_pake_input().
+@@ -1072,14 +1087,23 @@ typedef uint32_t psa_pake_primitive_t;
+  *                      the parameters are incompatible, return 0.
+  */
+ #define PSA_PAKE_INPUT_SIZE(alg, primitive, input_step)                 \
+-    (PSA_ALG_IS_JPAKE(alg) &&                                           \
+-     primitive == PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,      \
+-                                     PSA_ECC_FAMILY_SECP_R1, 256) ?    \
+-     (                                                                 \
+-         input_step == PSA_PAKE_STEP_KEY_SHARE ? 65 :                    \
+-         input_step == PSA_PAKE_STEP_ZK_PUBLIC ? 65 :                    \
+-         32                                                              \
+-     ) :                                                               \
++    ((primitive) == PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,     \
++                                       PSA_ECC_FAMILY_SECP_R1, 256) ?   \
++     (                                                                  \
++         PSA_ALG_IS_JPAKE(alg) ?                                        \
++         (                                                              \
++             (input_step) == PSA_PAKE_STEP_KEY_SHARE ? 65 :             \
++             (input_step) == PSA_PAKE_STEP_ZK_PUBLIC ? 65 :             \
++             32                                                         \
++         ) :                                                            \
++         (alg) == PSA_ALG_SPAKE2P_MATTER ?                              \
++         (                                                              \
++             (input_step) == PSA_PAKE_STEP_KEY_SHARE ? 65 :             \
++             (input_step) == PSA_PAKE_STEP_CONFIRM ? 32 :               \
++             0                                                          \
++         ) :                                                            \
++         0                                                              \
++     ) :                                                                \
+      0)
+ 
+ /** Output buffer size for psa_pake_output() for any of the supported PAKE
+diff --git a/include/tf-psa-crypto/private/crypto_adjust_config_derived.h b/include/tf-psa-crypto/private/crypto_adjust_config_derived.h
+index 131d18e..233150c 100644
+--- a/include/tf-psa-crypto/private/crypto_adjust_config_derived.h
++++ b/include/tf-psa-crypto/private/crypto_adjust_config_derived.h
+@@ -95,7 +95,8 @@
+ #define PSA_HAVE_ALG_SOME_RSA_SIGN_OR_VERIFY
+ #endif
+ 
+-#if defined(PSA_WANT_ALG_JPAKE)
++#if defined(PSA_WANT_ALG_JPAKE) || \
++    defined(PSA_WANT_ALG_SPAKE2P_MATTER)
+ #define PSA_WANT_ALG_SOME_PAKE 1
+ #endif
+ 
+diff --git a/scripts/data_files/config-options-current.txt b/scripts/data_files/config-options-current.txt
+index 576a55a..02a4869 100644
+--- a/scripts/data_files/config-options-current.txt
++++ b/scripts/data_files/config-options-current.txt
+@@ -150,6 +150,7 @@ PSA_WANT_ALG_HKDF_EXPAND
+ PSA_WANT_ALG_HKDF_EXTRACT
+ PSA_WANT_ALG_HMAC
+ PSA_WANT_ALG_JPAKE
++PSA_WANT_ALG_SPAKE2P_MATTER
+ PSA_WANT_ALG_MD5
+ PSA_WANT_ALG_OFB
+ PSA_WANT_ALG_PBKDF2_AES_CMAC_PRF_128
+-- 
+2.47.3
+

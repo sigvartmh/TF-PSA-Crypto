@@ -1,0 +1,128 @@
+From 47e96166d46e66ee4c70d2cbee42ffbc36c05389 Mon Sep 17 00:00:00 2001
+From: tester <test@example.com>
+Date: Tue, 19 May 2026 21:07:07 +0000
+Subject: [PATCH] docs: review SPAKE2+ PAKE driver interface changes
+
+---
+ .../spake2p-pake-driver-interface-review.md   | 109 ++++++++++++++++++
+ 1 file changed, 109 insertions(+)
+ create mode 100644 docs/architecture/spake2p-pake-driver-interface-review.md
+
+diff --git a/docs/architecture/spake2p-pake-driver-interface-review.md b/docs/architecture/spake2p-pake-driver-interface-review.md
+new file mode 100644
+index 0000000..205e205
+--- /dev/null
++++ b/docs/architecture/spake2p-pake-driver-interface-review.md
+@@ -0,0 +1,109 @@
++# SPAKE2+ PAKE driver interface review notes
++
++This note records the interface decision for the initial Matter P-256 SPAKE2+
++implementation. It is intended to accompany the implementation patches and to
++make the driver-facing changes easier to review.
++
++## Decision
++
++Carry SPAKE2+ through the existing PAKE driver path instead of adding a
++software-only side path in `core/psa_crypto.c`.
++
++The initial built-in implementation remains limited to transparent software keys
++and `PSA_ALG_SPAKE2P_MATTER` with
++`PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC, PSA_ECC_FAMILY_SECP_R1, 256)`,
++but the core still dispatches through the PAKE driver entry points. Opaque keys
++and external accelerator implementations can therefore be added later by filling
++in the same PAKE driver contract instead of redesigning the core state machine.
++
++## Why this matches TF-PSA-Crypto architecture
++
++TF-PSA-Crypto is organized around the PSA driver interface so that cryptographic
++implementations can be substituted by built-in software, accelerators, secure
++elements or other backends. SPAKE2+ should follow that model even though the
++first merged implementation is built-in-only.
++
++This patch series therefore extends the private PAKE driver inputs rather than
++calling `drivers/builtin/src/psa_crypto_spake2p.c` directly from the public PSA
++layer. The public PSA API is unchanged.
++
++## Driver-input changes under review
++
++The SPAKE2+ patches extend `psa_crypto_driver_pake_inputs_t` with data that is
++needed by augmented PAKEs:
++
++- the raw PAKE key buffer and length;
++- the PSA key attributes for the PAKE key;
++- the selected PAKE role;
++- optional user and peer identities;
++- optional context;
++- explicit presence flags for user, peer, context and role.
++
++The explicit flags are required because SPAKE2+ treats absent and empty inputs
++differently in one important case: absent context is omitted from the transcript,
++while explicitly supplied zero-length context is included as a zero-length field.
++The same flags also preserve zero-length user and peer identities without
++confusing them with "setter not called".
++
++## Compatibility assessment
++
++### Public API and ABI
++
++No public PSA function prototype changes are introduced. The feature is exposed
++through existing PAKE entry points and existing SPAKE2+ identifiers.
++
++### Driver ABI
++
++The affected structure is part of the driver-facing/private implementation
++contract, not the public PSA application ABI. Existing external PAKE drivers may
++need source updates if they instantiate or inspect `psa_crypto_driver_pake_inputs_t`.
++That is acceptable for a new algorithm family, but it should be called out in the
++pull-request description.
++
++### Existing J-PAKE behavior
++
++J-PAKE should remain behaviorally unchanged:
++
++- password and password-hash keys are still used for J-PAKE;
++- the existing J-PAKE step sequence remains intact;
++- the new augmented-PAKE fields are populated only for SPAKE2+ paths;
++- the new user/peer/context presence flags are compatible with the existing
++  non-empty J-PAKE identity requirements.
++
++## Maintainer review checklist
++
++Reviewers should explicitly check the following items before merge:
++
++1. **Layering:** `core/psa_crypto.c` performs public PSA validation and state
++   sequencing, while the built-in driver performs protocol-specific SPAKE2+
++   arithmetic, transcript construction and confirmation.
++2. **Driver extensibility:** the augmented-PAKE fields are sufficient for a
++   future accelerator to implement Matter SPAKE2+ without adding a second public
++   PSA path.
++3. **Algorithm gating:** all SPAKE2+ paths are guarded by
++   `PSA_WANT_ALG_SPAKE2P_MATTER` and the built-in implementation is guarded by
++   `MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P` or
++   `MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P_MATTER` as appropriate.
++4. **Key restrictions:** the first implementation rejects opaque/external keys
++   unless an accelerator path explicitly supports them.
++5. **Context semantics:** omitted context and explicit empty context are tested
++   separately and remain distinguishable through driver dispatch.
++6. **Error mapping:** invalid key-share input maps to
++   `PSA_ERROR_INVALID_ARGUMENT`; confirmation mismatch maps to
++   `PSA_ERROR_INVALID_SIGNATURE`; wrong sequencing maps to
++   `PSA_ERROR_BAD_STATE`.
++7. **Secret lifetime:** `w0`, `w1`, ephemeral scalars, transcript-derived keys,
++   confirmation keys and shared secret material are zeroized on abort and failure
++   paths.
++8. **J-PAKE regression:** the J-PAKE PAKE suite passes with and without
++   `PSA_WANT_ALG_SPAKE2P_MATTER` enabled.
++
++## Open follow-ups
++
++These are intentionally out of scope for the first Matter P-256 merge:
++
++- generic RFC 9383 `PSA_ALG_SPAKE2P_HMAC()` and `PSA_ALG_SPAKE2P_CMAC()`;
++- P-384, P-521, edwards25519 and edwards448;
++- persistent storage optimizations for caching `L` with key pairs;
++- opaque-key and external-driver SPAKE2+ implementations;
++- broader conformance/fuzz jobs beyond the focused Matter P-256 CI job.
+-- 
+2.47.3
+

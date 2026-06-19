@@ -1,0 +1,417 @@
+From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
+From: tester <test@example.com>
+Date: Tue, 19 May 2026 22:00:00 +0000
+Subject: [PATCH 6/12 v2] psa: add SPAKE2+ P-256 key import and export
+
+This is a rebased v2 of patch 0006. The previous version was anchored
+on brittle positions in core/psa_crypto.c and include/psa/crypto_sizes.h.
+This version keeps the same implementation but anchors the core import
+hook near the start of the asymmetric import branch and anchors the size
+macros around the FFDH export-size macros.
+---
+ core/psa_crypto.c                         |  34 +++++
+ include/psa/crypto_sizes.h                |  35 +++++-
+ drivers/builtin/src/psa_crypto_spake2p.c  | 222 ++++++++++++++++++++++++++++++
+ drivers/builtin/src/psa_crypto_spake2p.h  |  17 +++
+ 4 files changed, 307 insertions(+), 1 deletion(-)
+
+diff --git a/core/psa_crypto.c b/core/psa_crypto.c
+--- a/core/psa_crypto.c
++++ b/core/psa_crypto.c
+@@ -18,6 +18,9 @@
+ #include "psa_crypto_ecp.h"
+ #include "psa_crypto_ffdh.h"
+ #include "psa_crypto_hash.h"
++#if defined(MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P)
++#include "psa_crypto_spake2p.h"
++#endif
+ #include "psa_crypto_mac.h"
+ #include "psa_crypto_rsa.h"
+ #include "psa_crypto_ecp.h"
+@@ -620,5 +623,13 @@ psa_status_t psa_import_key_into_slot(
+         return PSA_SUCCESS;
+     } else if (PSA_KEY_TYPE_IS_ASYMMETRIC(type)) {
++#if defined(MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P)
++        if (PSA_KEY_TYPE_IS_SPAKE2P(type)) {
++            return mbedtls_psa_spake2p_import_key(
++                attributes, data, data_length,
++                key_buffer, key_buffer_size,
++                key_buffer_length, bits);
++        }
++#endif /* MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P */
+ #if defined(MBEDTLS_PSA_BUILTIN_KEY_TYPE_DH_KEY_PAIR_IMPORT) || \
+     defined(MBEDTLS_PSA_BUILTIN_KEY_TYPE_DH_PUBLIC_KEY)
+         if (PSA_KEY_TYPE_IS_DH(type)) {
+@@ -2920,6 +2931,14 @@ psa_status_t psa_export_key_internal(
+     size_t *data_length)
+ {
+     psa_key_type_t type = attributes->type;
++
++#if defined(MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P)
++    if (PSA_KEY_TYPE_IS_SPAKE2P(type)) {
++        return psa_export_key_buffer_internal(
++            key_buffer, key_buffer_size, data, data_size, data_length);
++    }
++#endif /* MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P */
++
+     if (key_type_is_raw_bytes(type) ||
+         PSA_KEY_TYPE_IS_RSA(type) ||
+         PSA_KEY_TYPE_IS_ECC(type) ||
+@@ -2970,6 +2989,15 @@ psa_status_t psa_export_public_key_internal(
+     size_t *data_length)
+ {
+     psa_key_type_t type = attributes->type;
++
++#if defined(MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P)
++    if (PSA_KEY_TYPE_IS_SPAKE2P(type)) {
++        return mbedtls_psa_spake2p_export_public_key(
++            attributes, key_buffer, key_buffer_size,
++            data, data_size, data_length);
++    }
++#endif /* MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P */
++
+     if (PSA_KEY_TYPE_IS_PUBLIC_KEY(type) &&
+         (PSA_KEY_TYPE_IS_RSA(type) ||
+          PSA_KEY_TYPE_IS_ECC(type) ||
+diff --git a/include/psa/crypto_sizes.h b/include/psa/crypto_sizes.h
+--- a/include/psa/crypto_sizes.h
++++ b/include/psa/crypto_sizes.h
+@@ -72,3 +72,13 @@
+ /* Maximum size of an DH public key. */
+ #define PSA_KEY_EXPORT_FFDH_PUBLIC_KEY_MAX_SIZE(key_bits) \
+     (PSA_BITS_TO_BYTES(key_bits))
++
++/* Maximum size of the export encoding of a SPAKE2+ key pair.
++ * The representation is w0 || w1. */
++#define PSA_KEY_EXPORT_SPAKE2P_KEY_PAIR_MAX_SIZE(key_bits) \
++    (2u * PSA_BITS_TO_BYTES(key_bits))
++
++/* Maximum size of the export encoding of a SPAKE2+ public key.
++ * The representation is w0 || L, where L is an uncompressed EC point. */
++#define PSA_KEY_EXPORT_SPAKE2P_PUBLIC_KEY_MAX_SIZE(key_bits) \
++    (PSA_BITS_TO_BYTES(key_bits) + PSA_KEY_EXPORT_ECC_PUBLIC_KEY_MAX_SIZE(key_bits))
+@@ -76,6 +87,8 @@
+ #define PSA_EXPORT_KEY_OUTPUT_SIZE(key_type, key_bits) \
+     ((key_type) == PSA_KEY_TYPE_RSA_KEY_PAIR ? PSA_KEY_EXPORT_RSA_KEY_PAIR_MAX_SIZE(key_bits) : \
+      (key_type) == PSA_KEY_TYPE_RSA_PUBLIC_KEY ? PSA_KEY_EXPORT_RSA_PUBLIC_KEY_MAX_SIZE(key_bits) : \
++     PSA_KEY_TYPE_IS_SPAKE2P_KEY_PAIR(key_type) ? PSA_KEY_EXPORT_SPAKE2P_KEY_PAIR_MAX_SIZE(key_bits) : \
++     PSA_KEY_TYPE_IS_SPAKE2P_PUBLIC_KEY(key_type) ? PSA_KEY_EXPORT_SPAKE2P_PUBLIC_KEY_MAX_SIZE(key_bits) : \
+      PSA_KEY_TYPE_IS_ECC_KEY_PAIR(key_type) ? PSA_KEY_EXPORT_ECC_KEY_PAIR_MAX_SIZE(key_bits) : \
+      PSA_KEY_TYPE_IS_ECC_PUBLIC_KEY(key_type) ? PSA_KEY_EXPORT_ECC_PUBLIC_KEY_MAX_SIZE(key_bits) : \
+      PSA_BITS_TO_BYTES(key_bits)) /*unstructured; FFDH public or private*/
+@@ -81,5 +94,6 @@
+ #define PSA_EXPORT_PUBLIC_KEY_OUTPUT_SIZE(key_type, key_bits) \
+     (PSA_KEY_TYPE_IS_RSA(key_type) ? PSA_KEY_EXPORT_RSA_PUBLIC_KEY_MAX_SIZE(key_bits) : \
+      PSA_KEY_TYPE_IS_ECC(key_type) ? PSA_KEY_EXPORT_ECC_PUBLIC_KEY_MAX_SIZE(key_bits) : \
++     PSA_KEY_TYPE_IS_SPAKE2P(key_type) ? PSA_KEY_EXPORT_SPAKE2P_PUBLIC_KEY_MAX_SIZE(key_bits) : \
+      PSA_KEY_TYPE_IS_DH(key_type) ? PSA_BITS_TO_BYTES(key_bits) : \
+      0u)
+@@ -83,5 +97,14 @@
+  */
+ #define PSA_EXPORT_KEY_PAIR_MAX_SIZE 1
++
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER) && \
++    (PSA_KEY_EXPORT_SPAKE2P_KEY_PAIR_MAX_SIZE(256u) > \
++     PSA_EXPORT_KEY_PAIR_MAX_SIZE)
++#undef PSA_EXPORT_KEY_PAIR_MAX_SIZE
++#define PSA_EXPORT_KEY_PAIR_MAX_SIZE \
++    PSA_KEY_EXPORT_SPAKE2P_KEY_PAIR_MAX_SIZE(256u)
++#endif
++
+ #if defined(PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_BASIC) && \
+     (PSA_KEY_EXPORT_ECC_KEY_PAIR_MAX_SIZE(PSA_VENDOR_ECC_MAX_CURVE_BITS) > \
+      PSA_EXPORT_KEY_PAIR_MAX_SIZE)
+@@ -85,5 +108,14 @@
+  */
+ #define PSA_EXPORT_PUBLIC_KEY_MAX_SIZE 1
++
++#if defined(PSA_WANT_ALG_SPAKE2P_MATTER) && \
++    (PSA_KEY_EXPORT_SPAKE2P_PUBLIC_KEY_MAX_SIZE(256u) > \
++     PSA_EXPORT_PUBLIC_KEY_MAX_SIZE)
++#undef PSA_EXPORT_PUBLIC_KEY_MAX_SIZE
++#define PSA_EXPORT_PUBLIC_KEY_MAX_SIZE \
++    PSA_KEY_EXPORT_SPAKE2P_PUBLIC_KEY_MAX_SIZE(256u)
++#endif
++
+ #if defined(PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY) && \
+     (PSA_KEY_EXPORT_ECC_PUBLIC_KEY_MAX_SIZE(PSA_VENDOR_ECC_MAX_CURVE_BITS) > \
+      PSA_EXPORT_PUBLIC_KEY_MAX_SIZE)
+diff --git a/drivers/builtin/src/psa_crypto_spake2p.c b/drivers/builtin/src/psa_crypto_spake2p.c
+index 1fe1d6d..7b51370 100644
+--- a/drivers/builtin/src/psa_crypto_spake2p.c
++++ b/drivers/builtin/src/psa_crypto_spake2p.c
+@@ -12,12 +12,233 @@
+ 
+ #include <psa/crypto.h>
+ #include "psa_crypto_spake2p.h"
++#include "psa_crypto_spake2p_ecp.h"
+ 
+ #include "mbedtls/platform.h"
+ #include "mbedtls/platform_util.h"
+ 
+ #include <string.h>
+ 
++static int mbedtls_psa_spake2p_is_key_pair(psa_key_type_t type)
++{
++    return PSA_KEY_TYPE_IS_SPAKE2P_KEY_PAIR(type);
++}
++
++static psa_status_t mbedtls_psa_spake2p_check_p256_type(psa_key_type_t type)
++{
++    if (!PSA_KEY_TYPE_IS_SPAKE2P(type)) {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++
++    if (PSA_KEY_TYPE_ECC_GET_FAMILY(type) != PSA_ECC_FAMILY_SECP_R1) {
++        return PSA_ERROR_NOT_SUPPORTED;
++    }
++
++    return PSA_SUCCESS;
++}
++
++static psa_status_t mbedtls_psa_spake2p_load_p256(mbedtls_ecp_group *grp)
++{
++    return mbedtls_psa_spake2p_ecp_load_group(grp,
++                                              PSA_ECC_FAMILY_SECP_R1,
++                                              256);
++}
++
++static psa_status_t mbedtls_psa_spake2p_validate_key_material(
++    psa_key_type_t type,
++    const uint8_t *data,
++    size_t data_length)
++{
++    psa_status_t status;
++    mbedtls_ecp_group grp;
++    mbedtls_mpi w0;
++    mbedtls_mpi w1;
++    mbedtls_ecp_point L;
++    size_t expected_length;
++
++    if (data == NULL) {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++
++    status = mbedtls_psa_spake2p_check_p256_type(type);
++    if (status != PSA_SUCCESS) {
++        return status;
++    }
++
++    if (mbedtls_psa_spake2p_is_key_pair(type)) {
++        expected_length = MBEDTLS_PSA_SPAKE2P_P256_KEYPAIR_BYTES;
++    } else if (PSA_KEY_TYPE_IS_SPAKE2P_PUBLIC_KEY(type)) {
++        expected_length = MBEDTLS_PSA_SPAKE2P_P256_PUBLIC_BYTES;
++    } else {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++
++    if (data_length != expected_length) {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++
++    mbedtls_ecp_group_init(&grp);
++    mbedtls_mpi_init(&w0);
++    mbedtls_mpi_init(&w1);
++    mbedtls_ecp_point_init(&L);
++
++    status = mbedtls_psa_spake2p_load_p256(&grp);
++    if (status != PSA_SUCCESS) {
++        goto exit;
++    }
++
++    status = mbedtls_psa_spake2p_ecp_read_scalar(
++        &grp, &w0, data, MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES);
++    if (status != PSA_SUCCESS) {
++        goto exit;
++    }
++
++    if (mbedtls_psa_spake2p_is_key_pair(type)) {
++        status = mbedtls_psa_spake2p_ecp_read_scalar(
++            &grp, &w1,
++            data + MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES,
++            MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES);
++    } else {
++        status = mbedtls_psa_spake2p_ecp_import_point(
++            &grp, &L,
++            data + MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES,
++            MBEDTLS_PSA_SPAKE2P_P256_POINT_BYTES);
++    }
++
++exit:
++    mbedtls_ecp_point_free(&L);
++    mbedtls_mpi_free(&w1);
++    mbedtls_mpi_free(&w0);
++    mbedtls_ecp_group_free(&grp);
++    return status;
++}
++
++psa_status_t mbedtls_psa_spake2p_import_key(
++    const psa_key_attributes_t *attributes,
++    const uint8_t *data,
++    size_t data_length,
++    uint8_t *key_buffer,
++    size_t key_buffer_size,
++    size_t *key_buffer_length,
++    size_t *bits)
++{
++    psa_status_t status;
++    psa_key_type_t type;
++
++    if (attributes == NULL || data == NULL || key_buffer == NULL ||
++        key_buffer_length == NULL || bits == NULL) {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++
++    type = psa_get_key_type(attributes);
++    status = mbedtls_psa_spake2p_validate_key_material(type, data, data_length);
++    if (status != PSA_SUCCESS) {
++        return status;
++    }
++
++    if (key_buffer_size < data_length) {
++        return PSA_ERROR_BUFFER_TOO_SMALL;
++    }
++
++    memcpy(key_buffer, data, data_length);
++    *key_buffer_length = data_length;
++    *bits = 256;
++
++    return PSA_SUCCESS;
++}
++
++psa_status_t mbedtls_psa_spake2p_export_public_key(
++    const psa_key_attributes_t *attributes,
++    const uint8_t *key_buffer,
++    size_t key_buffer_size,
++    uint8_t *data,
++    size_t data_size,
++    size_t *data_length)
++{
++    psa_status_t status;
++    psa_key_type_t type;
++    mbedtls_ecp_group grp;
++    mbedtls_mpi w1;
++    mbedtls_ecp_point L;
++    size_t point_length = 0;
++
++    if (attributes == NULL || key_buffer == NULL || data_length == NULL) {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++
++    type = psa_get_key_type(attributes);
++    status = mbedtls_psa_spake2p_check_p256_type(type);
++    if (status != PSA_SUCCESS) {
++        return status;
++    }
++
++    if (PSA_KEY_TYPE_IS_SPAKE2P_PUBLIC_KEY(type)) {
++        if (key_buffer_size != MBEDTLS_PSA_SPAKE2P_P256_PUBLIC_BYTES) {
++            return PSA_ERROR_INVALID_ARGUMENT;
++        }
++        if (data_size < key_buffer_size) {
++            return PSA_ERROR_BUFFER_TOO_SMALL;
++        }
++        memcpy(data, key_buffer, key_buffer_size);
++        *data_length = key_buffer_size;
++        return PSA_SUCCESS;
++    }
++
++    if (!mbedtls_psa_spake2p_is_key_pair(type)) {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++    if (key_buffer_size != MBEDTLS_PSA_SPAKE2P_P256_KEYPAIR_BYTES) {
++        return PSA_ERROR_INVALID_ARGUMENT;
++    }
++    if (data_size < MBEDTLS_PSA_SPAKE2P_P256_PUBLIC_BYTES) {
++        return PSA_ERROR_BUFFER_TOO_SMALL;
++    }
++
++    mbedtls_ecp_group_init(&grp);
++    mbedtls_mpi_init(&w1);
++    mbedtls_ecp_point_init(&L);
++
++    status = mbedtls_psa_spake2p_load_p256(&grp);
++    if (status != PSA_SUCCESS) {
++        goto exit;
++    }
++
++    status = mbedtls_psa_spake2p_ecp_read_scalar(
++        &grp, &w1,
++        key_buffer + MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES,
++        MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES);
++    if (status != PSA_SUCCESS) {
++        goto exit;
++    }
++
++    status = mbedtls_psa_spake2p_ecp_mul_base(&grp, &L, &w1);
++    if (status != PSA_SUCCESS) {
++        goto exit;
++    }
++
++    memcpy(data, key_buffer, MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES);
++    status = mbedtls_psa_spake2p_ecp_export_point(
++        &grp, &L,
++        data + MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES,
++        data_size - MBEDTLS_PSA_SPAKE2P_P256_SCALAR_BYTES,
++        &point_length);
++    if (status != PSA_SUCCESS) {
++        goto exit;
++    }
++    if (point_length != MBEDTLS_PSA_SPAKE2P_P256_POINT_BYTES) {
++        status = PSA_ERROR_CORRUPTION_DETECTED;
++        goto exit;
++    }
++
++    *data_length = MBEDTLS_PSA_SPAKE2P_P256_PUBLIC_BYTES;
++
++exit:
++    mbedtls_ecp_point_free(&L);
++    mbedtls_mpi_free(&w1);
++    mbedtls_ecp_group_free(&grp);
++    return status;
++}
++
+ static psa_status_t mbedtls_psa_spake2p_copy_optional_input(
+     uint8_t **dst,
+     size_t *dst_len,
+@@ -133,6 +354,12 @@ psa_status_t mbedtls_psa_spake2p_setup(
+         goto error;
+     }
+ 
++    status = mbedtls_psa_spake2p_validate_key_material(
++        operation->key_type, inputs->key, key_len);
++    if (status != PSA_SUCCESS) {
++        goto error;
++    }
++
+     status = psa_crypto_driver_pake_get_key(inputs, operation->key,
+                                             sizeof(operation->key),
+                                             &actual_key_len);
+diff --git a/drivers/builtin/src/psa_crypto_spake2p.h b/drivers/builtin/src/psa_crypto_spake2p.h
+index dedb371..af88b6a 100644
+--- a/drivers/builtin/src/psa_crypto_spake2p.h
++++ b/drivers/builtin/src/psa_crypto_spake2p.h
+@@ -50,6 +50,23 @@ typedef struct {
+     unsigned MBEDTLS_PRIVATE(context_is_set) : 1;
+ } mbedtls_psa_spake2p_operation_t;
+ 
++psa_status_t mbedtls_psa_spake2p_import_key(
++    const psa_key_attributes_t *attributes,
++    const uint8_t *data,
++    size_t data_length,
++    uint8_t *key_buffer,
++    size_t key_buffer_size,
++    size_t *key_buffer_length,
++    size_t *bits);
++
++psa_status_t mbedtls_psa_spake2p_export_public_key(
++    const psa_key_attributes_t *attributes,
++    const uint8_t *key_buffer,
++    size_t key_buffer_size,
++    uint8_t *data,
++    size_t data_size,
++    size_t *data_length);
++
+ psa_status_t mbedtls_psa_spake2p_setup(
+     mbedtls_psa_spake2p_operation_t *operation,
+     const struct psa_crypto_driver_pake_inputs_s *inputs);

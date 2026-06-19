@@ -1,0 +1,122 @@
+From d5fc2afce3df7d8379329b01bbcc577f3180d38d Mon Sep 17 00:00:00 2001
+From: tester <test@example.com>
+Date: Tue, 19 May 2026 21:06:44 +0000
+Subject: [PATCH] tests: add CI coverage for SPAKE2+ Matter P-256
+
+---
+ .github/workflows/spake2p-matter-p256.yml | 47 ++++++++++++++++++++++
+ tests/scripts/ci-spake2p-matter-p256.sh   | 48 +++++++++++++++++++++++
+ 2 files changed, 95 insertions(+)
+ create mode 100644 .github/workflows/spake2p-matter-p256.yml
+ create mode 100755 tests/scripts/ci-spake2p-matter-p256.sh
+
+diff --git a/.github/workflows/spake2p-matter-p256.yml b/.github/workflows/spake2p-matter-p256.yml
+new file mode 100644
+index 0000000..0307237
+--- /dev/null
++++ b/.github/workflows/spake2p-matter-p256.yml
+@@ -0,0 +1,47 @@
++name: SPAKE2+ Matter P-256
++
++on:
++  pull_request:
++    paths:
++      - '.github/workflows/spake2p-matter-p256.yml'
++      - 'core/**'
++      - 'dispatch/**'
++      - 'drivers/builtin/**'
++      - 'include/**'
++      - 'scripts/data_files/config-options-current.txt'
++      - 'tests/scripts/ci-spake2p-matter-p256.sh'
++      - 'tests/suites/test_suite_psa_crypto_pake.*'
++      - 'tests/suites/test_suite_psa_crypto_spake2p.*'
++  push:
++    branches:
++      - development
++    paths:
++      - '.github/workflows/spake2p-matter-p256.yml'
++      - 'core/**'
++      - 'dispatch/**'
++      - 'drivers/builtin/**'
++      - 'include/**'
++      - 'scripts/data_files/config-options-current.txt'
++      - 'tests/scripts/ci-spake2p-matter-p256.sh'
++      - 'tests/suites/test_suite_psa_crypto_pake.*'
++      - 'tests/suites/test_suite_psa_crypto_spake2p.*'
++
++permissions:
++  contents: read
++
++jobs:
++  spake2p-matter-p256:
++    name: SPAKE2+ Matter P-256 build and PAKE tests
++    runs-on: ubuntu-22.04
++
++    steps:
++      - name: Check out source
++        uses: actions/checkout@v4
++        with:
++          submodules: recursive
++
++      - name: Install Python test-generation dependencies
++        run: python3 -m pip install --user -r scripts/basic.requirements.txt
++
++      - name: Build and test Matter SPAKE2+ P-256
++        run: tests/scripts/ci-spake2p-matter-p256.sh
+diff --git a/tests/scripts/ci-spake2p-matter-p256.sh b/tests/scripts/ci-spake2p-matter-p256.sh
+new file mode 100755
+index 0000000..0cc2218
+--- /dev/null
++++ b/tests/scripts/ci-spake2p-matter-p256.sh
+@@ -0,0 +1,48 @@
++#!/usr/bin/env bash
++#
++# Build-and-test job for the Matter SPAKE2+ P-256 PSA PAKE profile.
++#
++# This script is intentionally small and CI-friendly. It enables only the
++# SPAKE2+ Matter selector plus test hooks on top of the checked-out
++# configuration, then builds the generated CMake tree and runs the PAKE tests.
++#
++# Environment variables:
++#   BUILD_DIR        Build directory to use. Default: build-spake2p-matter-p256
++#   CMAKE_BUILD_TYPE CMake build type. Default: Debug
++#   JOBS             Parallel build jobs. Default: 2
++#   PYTHON           Python interpreter. Default: python3
++
++set -eu
++set -o pipefail
++
++ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
++cd "$ROOT_DIR"
++
++BUILD_DIR=${BUILD_DIR:-build-spake2p-matter-p256}
++CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE:-Debug}
++JOBS=${JOBS:-2}
++PYTHON=${PYTHON:-python3}
++CONFIG_FILE="include/psa/crypto_config.h"
++
++if [ ! -f "$CONFIG_FILE" ]; then
++    echo "error: $CONFIG_FILE not found" >&2
++    exit 1
++fi
++
++config_backup=$(mktemp "${TMPDIR:-/tmp}/tf-psa-crypto-config.XXXXXX")
++cp "$CONFIG_FILE" "$config_backup"
++restore_config() {
++    cp "$config_backup" "$CONFIG_FILE"
++    rm -f "$config_backup"
++}
++trap restore_config EXIT HUP INT TERM
++
++"$PYTHON" scripts/config.py set PSA_WANT_ALG_SPAKE2P_MATTER
++"$PYTHON" scripts/config.py set MBEDTLS_TEST_HOOKS
++
++rm -rf "$BUILD_DIR"
++cmake -S . -B "$BUILD_DIR" -D CMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE"
++cmake --build "$BUILD_DIR" --parallel "$JOBS"
++
++ctest --test-dir "$BUILD_DIR" --output-on-failure \
++    -R 'test_suite_psa_crypto_(pake|spake2p)'
+-- 
+2.47.3
+

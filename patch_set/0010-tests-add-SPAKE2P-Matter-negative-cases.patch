@@ -1,0 +1,304 @@
+From e609549ab18ef11e53a70b06d0d265453b68cda2 Mon Sep 17 00:00:00 2001
+From: tester <tester@example.com>
+Date: Tue, 19 May 2026 08:25:29 +0000
+Subject: [PATCH] tests: add SPAKE2+ Matter negative cases
+
+---
+ .../suites/test_suite_psa_crypto_spake2p.data |  20 ++
+ .../test_suite_psa_crypto_spake2p.function    | 255 ++++++++++++++++++
+ 2 files changed, 275 insertions(+)
+
+diff --git a/tests/suites/test_suite_psa_crypto_spake2p.data b/tests/suites/test_suite_psa_crypto_spake2p.data
+index 2e70e82..ff6a198 100644
+--- a/tests/suites/test_suite_psa_crypto_spake2p.data
++++ b/tests/suites/test_suite_psa_crypto_spake2p.data
+@@ -4,3 +4,23 @@ spake2p_matter_size_macros:
+ PSA SPAKE2+ Matter connectedhomeip-compatible deterministic vector
+ depends_on:MBEDTLS_TEST_HOOKS:MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P:PSA_WANT_ALG_SPAKE2P_MATTER
+ spake2p_matter_interop_vector:
++
++PSA SPAKE2+ Matter wrong confirmation is rejected
++depends_on:MBEDTLS_TEST_HOOKS:MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P:PSA_WANT_ALG_SPAKE2P_MATTER
++spake2p_matter_wrong_confirm_rejected:
++
++PSA SPAKE2+ Matter wrong context is rejected
++depends_on:MBEDTLS_TEST_HOOKS:MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P:PSA_WANT_ALG_SPAKE2P_MATTER
++spake2p_matter_wrong_context_rejected:
++
++PSA SPAKE2+ Matter swapped identities are rejected
++depends_on:MBEDTLS_TEST_HOOKS:MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P:PSA_WANT_ALG_SPAKE2P_MATTER
++spake2p_matter_swapped_identities_rejected:
++
++PSA SPAKE2+ Matter malformed point is rejected
++depends_on:MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P:PSA_WANT_ALG_SPAKE2P_MATTER
++spake2p_matter_malformed_point_rejected:
++
++PSA SPAKE2+ Matter wrong step order is rejected
++depends_on:MBEDTLS_PSA_BUILTIN_ALG_SPAKE2P:PSA_WANT_ALG_SPAKE2P_MATTER
++spake2p_matter_step_order_rejected:
+diff --git a/tests/suites/test_suite_psa_crypto_spake2p.function b/tests/suites/test_suite_psa_crypto_spake2p.function
+index 5f11163..141f9ab 100644
+--- a/tests/suites/test_suite_psa_crypto_spake2p.function
++++ b/tests/suites/test_suite_psa_crypto_spake2p.function
+@@ -284,3 +284,258 @@ exit:
+ #endif
+ }
+ /* END_CASE */
++
++/* BEGIN_CASE */
++void spake2p_matter_wrong_confirm_rejected( void )
++{
++#if defined(MBEDTLS_TEST_HOOKS)
++    psa_key_id_t client_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_key_id_t server_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_pake_operation_t client = PSA_PAKE_OPERATION_INIT;
++    psa_pake_operation_t server = PSA_PAKE_OPERATION_INIT;
++    uint8_t share_p[SPAKE2P_P256_POINT_BYTES];
++    uint8_t share_v[SPAKE2P_P256_POINT_BYTES];
++    uint8_t confirm_v[SPAKE2P_CONFIRM_BYTES];
++    size_t output_length = 0;
++    psa_status_t status;
++
++    PSA_ASSERT( psa_crypto_init() );
++    PSA_ASSERT( spake2p_matter_import_keypair(&client_key) );
++    PSA_ASSERT( spake2p_matter_import_keypair(&server_key) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &client, client_key, PSA_PAKE_ROLE_CLIENT,
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &server, server_key, PSA_PAKE_ROLE_SERVER,
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++
++    PSA_ASSERT( mbedtls_psa_spake2p_test_set_next_scalar(
++        spake2p_matter_client_scalar) );
++    PSA_ASSERT( psa_pake_output(&client, PSA_PAKE_STEP_KEY_SHARE,
++                                share_p, sizeof(share_p), &output_length) );
++    PSA_ASSERT( psa_pake_input(&server, PSA_PAKE_STEP_KEY_SHARE,
++                               share_p, output_length) );
++    PSA_ASSERT( mbedtls_psa_spake2p_test_set_next_scalar(
++        spake2p_matter_server_scalar) );
++    PSA_ASSERT( psa_pake_output(&server, PSA_PAKE_STEP_KEY_SHARE,
++                                share_v, sizeof(share_v), &output_length) );
++    PSA_ASSERT( psa_pake_output(&server, PSA_PAKE_STEP_CONFIRM,
++                                confirm_v, sizeof(confirm_v),
++                                &output_length) );
++    PSA_ASSERT( psa_pake_input(&client, PSA_PAKE_STEP_KEY_SHARE,
++                               share_v, sizeof(share_v)) );
++
++    confirm_v[0] ^= 0x01;
++    status = psa_pake_input(&client, PSA_PAKE_STEP_CONFIRM,
++                            confirm_v, sizeof(confirm_v));
++    TEST_EQUAL(PSA_ERROR_INVALID_SIGNATURE, status);
++
++exit:
++    psa_destroy_key(client_key);
++    psa_destroy_key(server_key);
++    psa_pake_abort(&client);
++    psa_pake_abort(&server);
++#else
++    TEST_ASSERT(0);
++#endif
++}
++/* END_CASE */
++
++/* BEGIN_CASE */
++void spake2p_matter_wrong_context_rejected( void )
++{
++#if defined(MBEDTLS_TEST_HOOKS)
++    psa_key_id_t client_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_key_id_t server_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_pake_operation_t client = PSA_PAKE_OPERATION_INIT;
++    psa_pake_operation_t server = PSA_PAKE_OPERATION_INIT;
++    uint8_t share_p[SPAKE2P_P256_POINT_BYTES];
++    uint8_t share_v[SPAKE2P_P256_POINT_BYTES];
++    uint8_t confirm_v[SPAKE2P_CONFIRM_BYTES];
++    size_t output_length = 0;
++    psa_status_t status;
++
++    PSA_ASSERT( psa_crypto_init() );
++    PSA_ASSERT( spake2p_matter_import_keypair(&client_key) );
++    PSA_ASSERT( spake2p_matter_import_keypair(&server_key) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &client, client_key, PSA_PAKE_ROLE_CLIENT,
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &server, server_key, PSA_PAKE_ROLE_SERVER,
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_bad_context, sizeof(spake2p_matter_bad_context)) );
++
++    PSA_ASSERT( mbedtls_psa_spake2p_test_set_next_scalar(
++        spake2p_matter_client_scalar) );
++    PSA_ASSERT( psa_pake_output(&client, PSA_PAKE_STEP_KEY_SHARE,
++                                share_p, sizeof(share_p), &output_length) );
++    PSA_ASSERT( psa_pake_input(&server, PSA_PAKE_STEP_KEY_SHARE,
++                               share_p, output_length) );
++    PSA_ASSERT( mbedtls_psa_spake2p_test_set_next_scalar(
++        spake2p_matter_server_scalar) );
++    PSA_ASSERT( psa_pake_output(&server, PSA_PAKE_STEP_KEY_SHARE,
++                                share_v, sizeof(share_v), &output_length) );
++    PSA_ASSERT( psa_pake_output(&server, PSA_PAKE_STEP_CONFIRM,
++                                confirm_v, sizeof(confirm_v),
++                                &output_length) );
++    PSA_ASSERT( psa_pake_input(&client, PSA_PAKE_STEP_KEY_SHARE,
++                               share_v, sizeof(share_v)) );
++
++    status = psa_pake_input(&client, PSA_PAKE_STEP_CONFIRM,
++                            confirm_v, sizeof(confirm_v));
++    TEST_EQUAL(PSA_ERROR_INVALID_SIGNATURE, status);
++
++exit:
++    psa_destroy_key(client_key);
++    psa_destroy_key(server_key);
++    psa_pake_abort(&client);
++    psa_pake_abort(&server);
++#else
++    TEST_ASSERT(0);
++#endif
++}
++/* END_CASE */
++
++/* BEGIN_CASE */
++void spake2p_matter_swapped_identities_rejected( void )
++{
++#if defined(MBEDTLS_TEST_HOOKS)
++    psa_key_id_t client_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_key_id_t server_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_pake_operation_t client = PSA_PAKE_OPERATION_INIT;
++    psa_pake_operation_t server = PSA_PAKE_OPERATION_INIT;
++    uint8_t share_p[SPAKE2P_P256_POINT_BYTES];
++    uint8_t share_v[SPAKE2P_P256_POINT_BYTES];
++    uint8_t confirm_v[SPAKE2P_CONFIRM_BYTES];
++    size_t output_length = 0;
++    psa_status_t status;
++
++    PSA_ASSERT( psa_crypto_init() );
++    PSA_ASSERT( spake2p_matter_import_keypair(&client_key) );
++    PSA_ASSERT( spake2p_matter_import_keypair(&server_key) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &client, client_key, PSA_PAKE_ROLE_CLIENT,
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &server, server_key, PSA_PAKE_ROLE_SERVER,
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++
++    PSA_ASSERT( mbedtls_psa_spake2p_test_set_next_scalar(
++        spake2p_matter_client_scalar) );
++    PSA_ASSERT( psa_pake_output(&client, PSA_PAKE_STEP_KEY_SHARE,
++                                share_p, sizeof(share_p), &output_length) );
++    PSA_ASSERT( psa_pake_input(&server, PSA_PAKE_STEP_KEY_SHARE,
++                               share_p, output_length) );
++    PSA_ASSERT( mbedtls_psa_spake2p_test_set_next_scalar(
++        spake2p_matter_server_scalar) );
++    PSA_ASSERT( psa_pake_output(&server, PSA_PAKE_STEP_KEY_SHARE,
++                                share_v, sizeof(share_v), &output_length) );
++    PSA_ASSERT( psa_pake_output(&server, PSA_PAKE_STEP_CONFIRM,
++                                confirm_v, sizeof(confirm_v),
++                                &output_length) );
++    PSA_ASSERT( psa_pake_input(&client, PSA_PAKE_STEP_KEY_SHARE,
++                               share_v, sizeof(share_v)) );
++
++    status = psa_pake_input(&client, PSA_PAKE_STEP_CONFIRM,
++                            confirm_v, sizeof(confirm_v));
++    TEST_EQUAL(PSA_ERROR_INVALID_SIGNATURE, status);
++
++exit:
++    psa_destroy_key(client_key);
++    psa_destroy_key(server_key);
++    psa_pake_abort(&client);
++    psa_pake_abort(&server);
++#else
++    TEST_ASSERT(0);
++#endif
++}
++/* END_CASE */
++
++/* BEGIN_CASE */
++void spake2p_matter_malformed_point_rejected( void )
++{
++    psa_key_id_t server_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_pake_operation_t server = PSA_PAKE_OPERATION_INIT;
++    uint8_t malformed[SPAKE2P_P256_POINT_BYTES] = { 0x04 };
++    psa_status_t status;
++
++    PSA_ASSERT( psa_crypto_init() );
++    PSA_ASSERT( spake2p_matter_import_keypair(&server_key) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &server, server_key, PSA_PAKE_ROLE_SERVER,
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++
++    status = psa_pake_input(&server, PSA_PAKE_STEP_KEY_SHARE,
++                            malformed, sizeof(malformed));
++    TEST_EQUAL(PSA_ERROR_INVALID_ARGUMENT, status);
++
++exit:
++    psa_destroy_key(server_key);
++    psa_pake_abort(&server);
++}
++/* END_CASE */
++
++/* BEGIN_CASE */
++void spake2p_matter_step_order_rejected( void )
++{
++    psa_key_id_t client_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_key_id_t server_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_key_id_t shared_key = MBEDTLS_SVC_KEY_ID_INIT;
++    psa_pake_operation_t client = PSA_PAKE_OPERATION_INIT;
++    psa_pake_operation_t server = PSA_PAKE_OPERATION_INIT;
++    psa_key_attributes_t shared_attributes = PSA_KEY_ATTRIBUTES_INIT;
++    uint8_t buffer[SPAKE2P_CONFIRM_BYTES];
++    size_t output_length = 0;
++    psa_status_t status;
++
++    PSA_ASSERT( psa_crypto_init() );
++    PSA_ASSERT( spake2p_matter_import_keypair(&client_key) );
++    PSA_ASSERT( spake2p_matter_import_keypair(&server_key) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &client, client_key, PSA_PAKE_ROLE_CLIENT,
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++    PSA_ASSERT( spake2p_matter_setup_party(
++        &server, server_key, PSA_PAKE_ROLE_SERVER,
++        spake2p_matter_server_id, sizeof(spake2p_matter_server_id),
++        spake2p_matter_client_id, sizeof(spake2p_matter_client_id),
++        spake2p_matter_context, sizeof(spake2p_matter_context)) );
++
++    status = psa_pake_output(&client, PSA_PAKE_STEP_CONFIRM,
++                             buffer, sizeof(buffer), &output_length);
++    TEST_EQUAL(PSA_ERROR_BAD_STATE, status);
++
++    status = psa_pake_output(&server, PSA_PAKE_STEP_KEY_SHARE,
++                             buffer, sizeof(buffer), &output_length);
++    TEST_EQUAL(PSA_ERROR_BAD_STATE, status);
++
++    psa_set_key_type(&shared_attributes, PSA_KEY_TYPE_RAW_DATA);
++    psa_set_key_usage_flags(&shared_attributes, PSA_KEY_USAGE_EXPORT);
++    status = psa_pake_get_shared_key(&client, &shared_attributes,
++                                     &shared_key);
++    TEST_EQUAL(PSA_ERROR_BAD_STATE, status);
++
++exit:
++    psa_reset_key_attributes(&shared_attributes);
++    psa_destroy_key(shared_key);
++    psa_destroy_key(client_key);
++    psa_destroy_key(server_key);
++    psa_pake_abort(&client);
++    psa_pake_abort(&server);
++}
++/* END_CASE */
+-- 
+2.47.3
+
