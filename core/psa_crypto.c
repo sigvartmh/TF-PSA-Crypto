@@ -9659,29 +9659,17 @@ static const psa_spake2p_curve_info_t spake2p_supported_curves[] =
 
 };
 
+/* Look up the curve whose public-key encoding (w0 || L) for this family is
+ * data_length bytes long. The table is the single source of truth. */
 static const psa_spake2p_curve_info_t *psa_spake2p_get_curve_from_data_length(
     const size_t data_length,
     const psa_ecc_family_t family)
 {
-    if (family == PSA_ECC_FAMILY_SECP_R1) {
-        switch (data_length) {
-            case (32 + 65):
-                return &spake2p_supported_curves[0];
-            case (48 + 97):
-                return &spake2p_supported_curves[1];
-            case (66 + 133):
-                return &spake2p_supported_curves[2];
-            default:
-                break;
-        }
-    } else if (family == PSA_ECC_FAMILY_TWISTED_EDWARDS) {
-        switch (data_length) {
-            case (32 + 32):
-                return &spake2p_supported_curves[3];
-            case (56 + 56):
-                return &spake2p_supported_curves[4];
-            default:
-                break;
+    for (size_t i = 0; i < ARRAY_LENGTH(spake2p_supported_curves); i++) {
+        const psa_spake2p_curve_info_t *info = &spake2p_supported_curves[i];
+        if (info->family == family &&
+            info->w0_len + info->L_len == data_length) {
+            return info;
         }
     }
     return NULL;
