@@ -203,6 +203,12 @@ spake2p_read_key_share_invalid:"bb8e1bbcf3c48f62c08db243652ae55d3e5586053fca7710
 SPAKE2+ read_key_share rejects off-curve point (P-256)
 spake2p_read_key_share_invalid:"bb8e1bbcf3c48f62c08db243652ae55d3e5586053fca77102994f23ad95491b304eb7c9db3d9a9eb1f8adab81b5794c1f13ae3e225efbe91ea487425854c7fc00f00bfedcbd09b2400142d40a14f2064ef31dfaa903b91d1faea7093d835966efd":"04ef3bd051bf78a2234ec0df197f7828060fe9856503579bb1733009042c15c0c1de127727f418b5966afadfdd95a6e4591d171056b333dab97a79c7193e3417d8":MBEDTLS_ERR_ECP_INVALID_KEY
 
+# The share is the RFC 9383 Appendix C P-256 shareP in SEC1 compressed form
+# (0x03 prefix: its Y coordinate is odd): a valid point, but RFC 9383 only
+# exchanges uncompressed points, so the encoding must be rejected.
+SPAKE2+ read_key_share rejects compressed point encoding (P-256)
+spake2p_read_key_share_invalid:"bb8e1bbcf3c48f62c08db243652ae55d3e5586053fca77102994f23ad95491b304eb7c9db3d9a9eb1f8adab81b5794c1f13ae3e225efbe91ea487425854c7fc00f00bfedcbd09b2400142d40a14f2064ef31dfaa903b91d1faea7093d835966efd":"03ef3bd051bf78a2234ec0df197f7828060fe9856503579bb1733009042c15c0c1":MBEDTLS_ERR_ECP_BAD_INPUT_DATA
+
 # SPAKE2+ CMAC confirmation known-answer tests (issue #9377). Identical to the
 # HMAC handshake except the confirmation MAC is AES-CMAC-128 instead of
 # HMAC-Hash (RFC 9383 Section 3.4); the KDF stays HKDF. The vectors are the

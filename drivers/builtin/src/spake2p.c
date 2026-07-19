@@ -782,6 +782,13 @@ int mbedtls_spake2p_read_key_share(mbedtls_spake2p_context *ctx,
         return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
     }
 
+    /* RFC 9383 and the PSA PAKE extension exchange key shares as
+     * uncompressed SEC1 points (0x04 || X || Y) only: reject compressed
+     * and otherwise malformed encodings before parsing. */
+    if (len != 2 * mbedtls_mpi_size(&ctx->grp.P) + 1 || buf[0] != 0x04) {
+        return MBEDTLS_ERR_ECP_BAD_INPUT_DATA;
+    }
+
     /* The peer's share is the other role's: a client reads shareV, a server
      * reads shareP. */
     peer = (ctx->role == MBEDTLS_SPAKE2P_CLIENT) ? &ctx->shareV : &ctx->shareP;
