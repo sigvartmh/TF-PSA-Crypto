@@ -383,6 +383,15 @@ spake2p_prover_no_identities:PSA_ALG_SPAKE2P_HMAC(PSA_ALG_SHA_256):256:65:"bb8e1
 PSA PAKE: J-PAKE output before identities are set
 ecjpake_missing_identities:
 
+PSA PAKE: J-PAKE setup key confirmation: unconfirmed key (required)
+jpake_setup_key_confirmation:PSA_PAKE_UNCONFIRMED_KEY:PSA_SUCCESS
+
+PSA PAKE: J-PAKE setup key confirmation: confirmed key not supported
+jpake_setup_key_confirmation:PSA_PAKE_CONFIRMED_KEY:PSA_ERROR_NOT_SUPPORTED
+
+PSA PAKE: J-PAKE setup key confirmation: out-of-range value
+jpake_setup_key_confirmation:7:PSA_ERROR_INVALID_ARGUMENT
+
 # SPAKE2+ Verifier (server) key-share tests. Vectors are from RFC 9383 Appendix C.
 
 PSA PAKE: SPAKE2+ Verifier key-share format P-256 HMAC

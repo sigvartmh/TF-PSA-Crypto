@@ -9306,6 +9306,18 @@ psa_status_t psa_pake_setup(
         psa_jpake_computation_stage_t *computation_stage =
             &operation->computation_stage.jpake;
 
+        /* J-PAKE has no key-confirmation phase, so it can only produce an
+         * unconfirmed shared secret: PSA_PAKE_UNCONFIRMED_KEY is the only
+         * valid setting. */
+        if (cipher_suite->key_confirmation == PSA_PAKE_CONFIRMED_KEY) {
+            status = PSA_ERROR_NOT_SUPPORTED;
+            goto exit;
+        }
+        if (cipher_suite->key_confirmation != PSA_PAKE_UNCONFIRMED_KEY) {
+            status = PSA_ERROR_INVALID_ARGUMENT;
+            goto exit;
+        }
+
         memset(computation_stage, 0, sizeof(*computation_stage));
         computation_stage->step = PSA_PAKE_STEP_KEY_SHARE;
     } else

@@ -181,6 +181,7 @@ static int exercise_pake_key(mbedtls_svc_key_id_t key_id,
     psa_pake_cipher_suite_t cipher_suite = psa_pake_cipher_suite_init();
     psa_pake_cs_set_algorithm(&cipher_suite, setup_alg);
     psa_pake_cs_set_primitive(&cipher_suite, primitive);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     PSA_ASSERT(psa_pake_setup(&client, key_id, &cipher_suite));
     PSA_ASSERT(psa_pake_set_user(&client, client_name, sizeof(client_name)));

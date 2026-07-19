@@ -810,6 +810,7 @@ void ecjpake_setup(int policy_alg_arg, int setup_alg_arg,
 
     psa_pake_cs_set_algorithm(&cipher_suite, setup_alg);
     psa_pake_cs_set_primitive(&cipher_suite, primitive);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     PSA_ASSERT(psa_pake_abort(&operation));
 
@@ -997,6 +998,7 @@ void ecjpake_rounds_inject(int alg_arg, int primitive_arg,
 
     psa_pake_cs_set_algorithm(&cipher_suite, alg);
     psa_pake_cs_set_primitive(&cipher_suite, primitive_arg);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     PSA_ASSERT(psa_pake_setup(&server, key, &cipher_suite));
     PSA_ASSERT(psa_pake_setup(&client, key, &cipher_suite));
@@ -1057,6 +1059,7 @@ void ecjpake_rounds(int alg_arg, int primitive_arg,
 
     psa_pake_cs_set_algorithm(&cipher_suite, alg);
     psa_pake_cs_set_primitive(&cipher_suite, primitive_arg);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     /* Get shared key */
     PSA_ASSERT(psa_key_derivation_setup(&server_derive, derive_alg));
@@ -1190,6 +1193,7 @@ void pake_input_getters_password()
 
     psa_pake_cs_set_algorithm(&cipher_suite, PSA_ALG_JPAKE(PSA_ALG_SHA_256));
     psa_pake_cs_set_primitive(&cipher_suite, primitive);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DERIVE);
     psa_set_key_algorithm(&attributes, PSA_ALG_JPAKE(PSA_ALG_SHA_256));
@@ -1253,6 +1257,7 @@ void pake_input_getters_cipher_suite()
 
     psa_pake_cs_set_algorithm(&cipher_suite, PSA_ALG_JPAKE(PSA_ALG_SHA_256));
     psa_pake_cs_set_primitive(&cipher_suite, primitive);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DERIVE);
     psa_set_key_algorithm(&attributes, PSA_ALG_JPAKE(PSA_ALG_SHA_256));
@@ -1301,6 +1306,7 @@ void pake_input_getters_user()
 
     psa_pake_cs_set_algorithm(&cipher_suite, PSA_ALG_JPAKE(PSA_ALG_SHA_256));
     psa_pake_cs_set_primitive(&cipher_suite, primitive);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DERIVE);
     psa_set_key_algorithm(&attributes, PSA_ALG_JPAKE(PSA_ALG_SHA_256));
@@ -1374,6 +1380,7 @@ void pake_input_getters_peer()
 
     psa_pake_cs_set_algorithm(&cipher_suite, PSA_ALG_JPAKE(PSA_ALG_SHA_256));
     psa_pake_cs_set_primitive(&cipher_suite, primitive);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_DERIVE);
     psa_set_key_algorithm(&attributes, PSA_ALG_JPAKE(PSA_ALG_SHA_256));
@@ -1924,6 +1931,7 @@ void ecjpake_missing_identities()
     psa_pake_cs_set_algorithm(&cs, alg);
     psa_pake_cs_set_primitive(&cs, PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
                                                       PSA_ECC_FAMILY_SECP_R1, 256));
+    psa_pake_cs_set_key_confirmation(&cs, PSA_PAKE_UNCONFIRMED_KEY);
     psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
     psa_set_key_algorithm(&attr, alg);
     psa_set_key_type(&attr, PSA_KEY_TYPE_PASSWORD);
@@ -2059,6 +2067,41 @@ void spake2p_verifier_key_share_invalid(int alg_arg, int bits_arg,
 
 exit:
     psa_pake_abort(&server);
+    PSA_DONE();
+}
+/* END_CASE */
+
+/* BEGIN_CASE depends_on:PSA_WANT_ALG_JPAKE:PSA_WANT_ALG_SHA_256:PSA_WANT_ECC_SECP_R1_256 */
+void jpake_setup_key_confirmation(int key_confirmation_arg,
+                                  int expected_status_arg)
+{
+    /* J-PAKE has no key-confirmation phase, so PSA_PAKE_UNCONFIRMED_KEY is
+     * the only valid setting: psa_pake_setup() must fail for
+     * PSA_PAKE_CONFIRMED_KEY (NOT_SUPPORTED) and for out-of-range values
+     * (INVALID_ARGUMENT). */
+    psa_algorithm_t alg = PSA_ALG_JPAKE(PSA_ALG_SHA_256);
+    psa_pake_cipher_suite_t cs = psa_pake_cipher_suite_init();
+    psa_pake_operation_t op = psa_pake_operation_init_short();
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    mbedtls_svc_key_id_t key = MBEDTLS_SVC_KEY_ID_INIT;
+    const uint8_t password[] = "abcd";
+
+    PSA_INIT();
+
+    psa_pake_cs_set_algorithm(&cs, alg);
+    psa_pake_cs_set_primitive(&cs, PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
+                                                      PSA_ECC_FAMILY_SECP_R1, 256));
+    psa_pake_cs_set_key_confirmation(&cs, (uint32_t) key_confirmation_arg);
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&attr, alg);
+    psa_set_key_type(&attr, PSA_KEY_TYPE_PASSWORD);
+    PSA_ASSERT(psa_import_key(&attr, password, sizeof(password), &key));
+
+    TEST_EQUAL(psa_pake_setup(&op, key, &cs), expected_status_arg);
+
+exit:
+    psa_destroy_key(key);
+    psa_pake_abort(&op);
     PSA_DONE();
 }
 /* END_CASE */
@@ -2407,6 +2450,11 @@ void spake2p_setup_key_mismatch(int suite_alg_arg, int bits_arg,
     psa_pake_cs_set_primitive(&cs, PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,
                                                       PSA_ECC_FAMILY_SECP_R1,
                                                       (uint32_t) bits_arg));
+    /* Use the key confirmation value that is valid for the cipher suite's
+     * algorithm, so that only the key mismatch is under test. */
+    psa_pake_cs_set_key_confirmation(&cs,
+                                     PSA_ALG_IS_JPAKE((psa_algorithm_t) suite_alg_arg) ?
+                                     PSA_PAKE_UNCONFIRMED_KEY : PSA_PAKE_CONFIRMED_KEY);
     psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
     psa_set_key_algorithm(&attr, (psa_algorithm_t) key_alg_arg);
     psa_set_key_type(&attr, (psa_key_type_t) key_type_arg);
