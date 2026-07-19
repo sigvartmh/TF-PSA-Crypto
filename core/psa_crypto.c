@@ -9726,6 +9726,14 @@ static psa_status_t psa_spake2p_prologue(
     psa_spake2p_computation_stage_t *stage =
         &operation->computation_stage.spake2p;
 
+    /* A step that can never be valid for SPAKE2+ (such as the J-PAKE ZK
+     * steps) is an invalid argument; a valid step attempted at the wrong
+     * time is a state error, checked below. */
+    if (step != PSA_PAKE_STEP_KEY_SHARE &&
+        step != PSA_PAKE_STEP_CONFIRM) {
+        return PSA_ERROR_INVALID_ARGUMENT;
+    }
+
     if (stage->round == PSA_SPAKE2P_KEY_SHARE) {
         if (step != PSA_PAKE_STEP_KEY_SHARE) {
             return PSA_ERROR_BAD_STATE;

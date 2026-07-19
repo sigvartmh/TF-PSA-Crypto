@@ -2071,6 +2071,39 @@ exit:
 }
 /* END_CASE */
 
+/* BEGIN_CASE depends_on:PSA_WANT_ALG_SPAKE2P_HMAC:PSA_WANT_ALG_SHA_256:PSA_WANT_ECC_SECP_R1_256 */
+void spake2p_never_valid_step(int is_output, int step_arg, data_t *client_key)
+{
+    /* A step that can never be valid for SPAKE2+ (such as the J-PAKE ZK
+     * steps) must be rejected with PSA_ERROR_INVALID_ARGUMENT by both
+     * psa_pake_output() and psa_pake_input(), as opposed to
+     * PSA_ERROR_BAD_STATE for a valid step attempted out of sequence. */
+    psa_pake_operation_t client = psa_pake_operation_init_short();
+    uint8_t buf[PSA_PAKE_OUTPUT_MAX_SIZE] = { 0 };
+    size_t len = 0;
+
+    PSA_INIT();
+
+    TEST_ASSERT(spake2p_setup_client(&client,
+                                     PSA_ALG_SPAKE2P_HMAC(PSA_ALG_SHA_256),
+                                     256, client_key, NULL, 1));
+
+    if (is_output) {
+        TEST_EQUAL(psa_pake_output(&client, (psa_pake_step_t) step_arg,
+                                   buf, sizeof(buf), &len),
+                   PSA_ERROR_INVALID_ARGUMENT);
+    } else {
+        TEST_EQUAL(psa_pake_input(&client, (psa_pake_step_t) step_arg,
+                                  buf, 65),
+                   PSA_ERROR_INVALID_ARGUMENT);
+    }
+
+exit:
+    psa_pake_abort(&client);
+    PSA_DONE();
+}
+/* END_CASE */
+
 /* BEGIN_CASE depends_on:PSA_WANT_ALG_JPAKE:PSA_WANT_ALG_SHA_256:PSA_WANT_ECC_SECP_R1_256 */
 void jpake_setup_key_confirmation(int key_confirmation_arg,
                                   int expected_status_arg)
