@@ -3060,6 +3060,7 @@ void pake_operations(data_t *pw_data, int forced_status_setup_arg, int forced_st
 
     psa_pake_cs_set_algorithm(&cipher_suite, alg);
     psa_pake_cs_set_primitive(&cipher_suite, primitive);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     mbedtls_test_driver_pake_hooks.forced_status = forced_status_setup;
 
@@ -3243,6 +3244,7 @@ void ecjpake_rounds(int alg_arg, int primitive_arg,
 
     psa_pake_cs_set_algorithm(&cipher_suite, alg);
     psa_pake_cs_set_primitive(&cipher_suite, primitive_arg);
+    psa_pake_cs_set_key_confirmation(&cipher_suite, PSA_PAKE_UNCONFIRMED_KEY);
 
     /* Get shared key */
     PSA_ASSERT(psa_key_derivation_setup(&server_derive, derive_alg));

@@ -1,0 +1,7 @@
+Default behavior changes
+   * psa_pake_setup() for PSA_ALG_JPAKE now requires the cipher suite to
+     select PSA_PAKE_UNCONFIRMED_KEY, as J-PAKE does not confirm the shared
+     key. The initializer default (PSA_PAKE_CONFIRMED_KEY) is rejected with
+     PSA_ERROR_NOT_SUPPORTED: callers must add
+     psa_pake_cs_set_key_confirmation(&cipher_suite,
+     PSA_PAKE_UNCONFIRMED_KEY).

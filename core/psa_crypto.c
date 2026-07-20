@@ -9306,6 +9306,18 @@ psa_status_t psa_pake_setup(
         psa_jpake_computation_stage_t *computation_stage =
             &operation->computation_stage.jpake;
 
+        /* J-PAKE has no key-confirmation phase, so it can only produce an
+         * unconfirmed shared secret: PSA_PAKE_UNCONFIRMED_KEY is the only
+         * valid setting. */
+        if (cipher_suite->key_confirmation == PSA_PAKE_CONFIRMED_KEY) {
+            status = PSA_ERROR_NOT_SUPPORTED;
+            goto exit;
+        }
+        if (cipher_suite->key_confirmation != PSA_PAKE_UNCONFIRMED_KEY) {
+            status = PSA_ERROR_INVALID_ARGUMENT;
+            goto exit;
+        }
+
         memset(computation_stage, 0, sizeof(*computation_stage));
         computation_stage->step = PSA_PAKE_STEP_KEY_SHARE;
     } else
@@ -9713,6 +9725,14 @@ static psa_status_t psa_spake2p_prologue(
 {
     psa_spake2p_computation_stage_t *stage =
         &operation->computation_stage.spake2p;
+
+    /* A step that can never be valid for SPAKE2+ (such as the J-PAKE ZK
+     * steps) is an invalid argument; a valid step attempted at the wrong
+     * time is a state error, checked below. */
+    if (step != PSA_PAKE_STEP_KEY_SHARE &&
+        step != PSA_PAKE_STEP_CONFIRM) {
+        return PSA_ERROR_INVALID_ARGUMENT;
+    }
 
     if (stage->round == PSA_SPAKE2P_KEY_SHARE) {
         if (step != PSA_PAKE_STEP_KEY_SHARE) {
