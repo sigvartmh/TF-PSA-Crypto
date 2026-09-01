@@ -275,6 +275,12 @@
 #endif
 #endif /* PSA_WANT_KEY_TYPE_SPAKE2P_* */
 
+#if defined(PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY)
+#if !defined(MBEDTLS_PSA_ACCEL_KEY_TYPE_SPAKE2P_PUBLIC_KEY)
+#define MBEDTLS_PSA_BUILTIN_KEY_TYPE_SPAKE2P_PUBLIC_KEY 1
+#endif /* missing accel */
+#endif /* PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY */
+
 /* ECC: key types: enable built-ins as needed.
  *
  * We need the key type built-in:
