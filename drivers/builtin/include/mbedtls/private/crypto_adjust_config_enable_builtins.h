@@ -255,13 +255,36 @@
 
 /* SPAKE2+ key types.
  *
- * SPAKE2+ key management (import validates w0 and the point L, export
+ * Builtin SPAKE2+ key management (import validates w0 and the point L, export
  * computes L = w1 * G, and deriving a key pair reduces scalars modulo the
- * group order) runs in the core and needs EC group data, point arithmetic
- * and bignum even when no SPAKE2+ algorithm is enabled, for example in a
- * build that only provisions or transports registration records. */
-#if defined(PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_BASIC) || \
-    defined(PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY)
+ * group order) needs EC group data, point arithmetic and bignum even when no
+ * SPAKE2+ algorithm is enabled, for example in a build that only provisions
+ * or transports registration records.
+ *
+ * Do not enable the builtin (and therefore do not force ECP/BIGNUM) when:
+ * - the SPAKE2+ key type itself is accelerated (deps stay with the driver,
+ *   e.g. test_psa_crypto_without_heap); or
+ * - ECC public keys are accelerated. Pulling ECP/BIGNUM back would break
+ *   driver-only ECC builds such as
+ *   test_psa_crypto_config_accel_ecc_ffdh_no_bignum. SPAKE2+ then stays
+ *   unsupported until KEY_TYPE_SPAKE2P_* is accelerated too.
+ */
+#if defined(PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_BASIC)
+#if !defined(MBEDTLS_PSA_ACCEL_KEY_TYPE_SPAKE2P_KEY_PAIR_BASIC) && \
+    !defined(MBEDTLS_PSA_ACCEL_KEY_TYPE_ECC_PUBLIC_KEY)
+#define MBEDTLS_PSA_BUILTIN_KEY_TYPE_SPAKE2P_KEY_PAIR_BASIC 1
+#endif /* missing accel */
+#endif /* PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_BASIC */
+
+#if defined(PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY)
+#if !defined(MBEDTLS_PSA_ACCEL_KEY_TYPE_SPAKE2P_PUBLIC_KEY) && \
+    !defined(MBEDTLS_PSA_ACCEL_KEY_TYPE_ECC_PUBLIC_KEY)
+#define MBEDTLS_PSA_BUILTIN_KEY_TYPE_SPAKE2P_PUBLIC_KEY 1
+#endif /* missing accel */
+#endif /* PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY */
+
+#if defined(MBEDTLS_PSA_BUILTIN_KEY_TYPE_SPAKE2P_KEY_PAIR_BASIC) || \
+    defined(MBEDTLS_PSA_BUILTIN_KEY_TYPE_SPAKE2P_PUBLIC_KEY)
 #define MBEDTLS_BIGNUM_C
 #define MBEDTLS_ECP_C
 #if defined(PSA_WANT_ECC_SECP_R1_256)
@@ -273,13 +296,7 @@
 #if defined(PSA_WANT_ECC_SECP_R1_521)
 #define MBEDTLS_ECP_DP_SECP521R1_ENABLED
 #endif
-#endif /* PSA_WANT_KEY_TYPE_SPAKE2P_* */
-
-#if defined(PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY)
-#if !defined(MBEDTLS_PSA_ACCEL_KEY_TYPE_SPAKE2P_PUBLIC_KEY)
-#define MBEDTLS_PSA_BUILTIN_KEY_TYPE_SPAKE2P_PUBLIC_KEY 1
-#endif /* missing accel */
-#endif /* PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY */
+#endif /* builtin SPAKE2+ key types */
 
 /* ECC: key types: enable built-ins as needed.
  *
