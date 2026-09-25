@@ -83,6 +83,7 @@
 #define PSA_WANT_ALG_SHA3_384                   1
 #define PSA_WANT_ALG_SHA3_512                   1
 #define PSA_WANT_ALG_STREAM_CIPHER              1
+#define PSA_WANT_ALG_SPAKE2P_HMAC               1
 #define PSA_WANT_ALG_TLS12_PRF                  1
 #define PSA_WANT_ALG_TLS12_PSK_TO_MS            1
 #define PSA_WANT_ALG_TLS12_ECJPAKE_TO_PMS       1
@@ -119,6 +120,7 @@
 #define PSA_WANT_KEY_TYPE_DH_PUBLIC_KEY         1
 #define PSA_WANT_KEY_TYPE_RAW_DATA              1
 #define PSA_WANT_KEY_TYPE_RSA_PUBLIC_KEY        1
+#define PSA_WANT_KEY_TYPE_SPAKE2P_PUBLIC_KEY    1
 
 /*
  * The following symbols extend and deprecate the legacy
@@ -144,6 +146,8 @@
 #define PSA_WANT_KEY_TYPE_DH_KEY_PAIR_EXPORT    1
 #define PSA_WANT_KEY_TYPE_DH_KEY_PAIR_GENERATE  1
 //#define PSA_WANT_KEY_TYPE_DH_KEY_PAIR_DERIVE    1 /* Not supported */
+
+//#define PSA_WANT_KEY_TYPE_SPAKE2P_KEY_PAIR_BASIC 1 /* Not supported */
 /** \} name SECTION Cryptographic mechanism selection (PSA API) */
 
 /**
@@ -2016,10 +2020,26 @@
  * This is an integration of https://github.com/pq-code-package/mldsa-native
  * in TF-PSA-Crypto.
  *
+ * This option enables the following components:
+ * - mldsa-native is included in the build. Its interface is only declared
+ *   in private headers.
+ * - A PSA driver for ML-DSA is included in the build. Its interface is
+ *   only declared in private headers.
+ * - The PSA driver dispatch layer supports ML-DSA with transparent keys
+ *   (key generation, export public key, one-shot sign and verify,
+ *   multipart sign and verify).
+ *
+ * For now, only pureML-DSA-87 (without prehashing) is supported.
+ *
+ * \note You must enable at least one parameter set.
+ *       The following parameter set is supported:
+ *       #TF_PSA_CRYPTO_PQCP_MLDSA_87_ENABLED.
+ *
  * \warning This option is experimental. It may change or be removed without
  *          notice.
  *
  * Module:  drivers/pqcp/src/wrap_mldsa_native.c
+ *          drivers/pqcp/src/psa_crypto_mldsa.c
  *
  * Uncomment to include mldsa-native in libtfpsacrypto.
  */
@@ -2064,6 +2084,50 @@
  * Uncomment to have mldsa-native use its own SHAKE.
  */
 //#define TF_PSA_CRYPTO_PQCP_OWN_SHAKE
+
+/**
+ * \def TF_PSA_CRYPTO_PQCP_BUFFER_ALLOC
+ *
+ * If this option is enabled, the MLDSA implementation from mldsa-native
+ * (#TF_PSA_CRYPTO_PQCP_MLDSA_ENABLED) will allocate large objects from
+ * a global, statically allocated buffer, rather than placing them on
+ * the stack.
+ *
+ * \warning This option is experimental. It may change or be removed without
+ *          notice.
+ *
+ * Module:  drivers/pqcp/src/pqcp_buffer_alloc.c
+ *
+ * Requires: TF_PSA_CRYPTO_PQCP_MLDSA_ENABLED
+ *
+ * Uncomment to have mldsa-native allocate large objects from a global buffer
+ */
+//#define TF_PSA_CRYPTO_PQCP_BUFFER_ALLOC
+
+/**
+ * \def TF_PSA_CRYPTO_PQCP_ALLOC_BUFFER_SIZE
+ *
+ * The size of the global buffer used by mldsa-native for large allocations
+ * when #TF_PSA_CRYPTO_PQCP_BUFFER_ALLOC is enabled.
+ * This has no effect when #TF_PSA_CRYPTO_PQCP_BUFFER_ALLOC is disabled.
+ * The default value is generally suitable for most applications, but it can
+ * be overridden to reduce RAM usage if your application does not use all of
+ * the supported MLDSA operations (sign, verify, export_public_key).
+ *
+ * The MLD_TOTAL_ALLOC_* macros representing the minimum buffer size needed
+ * for each operation are defined in
+ * drivers/pqcp/mldsa-native/mldsa/mldsa_native.h
+ *
+ * \warning This option is experimental. It may change or be removed without
+ *          notice.
+ *
+ * Module:  drivers/pqcp/src/pqcp_buffer_alloc.c
+ *
+ * Requires: TF_PSA_CRYPTO_PQCP_BUFFER_ALLOC
+ *
+ * Uncomment to override the default buffer size used by TF_PSA_CRYPTO_PQCP_BUFFER_ALLOC
+ */
+//#define TF_PSA_CRYPTO_PQCP_ALLOC_BUFFER_SIZE MLD_TOTAL_ALLOC_87
 
 /** \} name SECTION: Builtin drivers */
 
