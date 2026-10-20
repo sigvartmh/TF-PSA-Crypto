@@ -106,6 +106,8 @@ static inline psa_algorithm_t psa_get_key_enrollment_algorithm(
 
 /**@}*/
 
+/** \addtogroup initialization */
+
 /**
  * \brief Library deinitialization.
  *
@@ -156,104 +158,6 @@ typedef struct mbedtls_psa_stats_s {
  *       may not expose this function.
  */
 void mbedtls_psa_get_stats(mbedtls_psa_stats_t *stats);
-
-/** \addtogroup crypto_types
- * @{
- */
-
-/** DSA public key.
- *
- * The import and export format is the
- * representation of the public key `y = g^x mod p` as a big-endian byte
- * string. The length of the byte string is the length of the base prime `p`
- * in bytes.
- */
-#define PSA_KEY_TYPE_DSA_PUBLIC_KEY                 ((psa_key_type_t) 0x4002)
-
-/** DSA key pair (private and public key).
- *
- * The import and export format is the
- * representation of the private key `x` as a big-endian byte string. The
- * length of the byte string is the private key size in bytes (leading zeroes
- * are not stripped).
- *
- * Deterministic DSA key derivation with psa_generate_derived_key follows
- * FIPS 186-4 &sect;B.1.2: interpret the byte string as integer
- * in big-endian order. Discard it if it is not in the range
- * [0, *N* - 2] where *N* is the boundary of the private key domain
- * (the prime *p* for Diffie-Hellman, the subprime *q* for DSA,
- * or the order of the curve's base point for ECC).
- * Add 1 to the resulting integer and use this as the private key *x*.
- *
- */
-#define PSA_KEY_TYPE_DSA_KEY_PAIR                    ((psa_key_type_t) 0x7002)
-
-/** Whether a key type is a DSA key (pair or public-only). */
-#define PSA_KEY_TYPE_IS_DSA(type)                                       \
-    (PSA_KEY_TYPE_PUBLIC_KEY_OF_KEY_PAIR(type) == PSA_KEY_TYPE_DSA_PUBLIC_KEY)
-
-#define PSA_ALG_DSA_BASE                        ((psa_algorithm_t) 0x06000400)
-/** DSA signature with hashing.
- *
- * This is the signature scheme defined by FIPS 186-4,
- * with a random per-message secret number (*k*).
- *
- * \param hash_alg      A hash algorithm (\c PSA_ALG_XXX value such that
- *                      #PSA_ALG_IS_HASH(\p hash_alg) is true).
- *                      This includes #PSA_ALG_ANY_HASH
- *                      when specifying the algorithm in a usage policy.
- *
- * \return              The corresponding DSA signature algorithm.
- * \return              Unspecified if \p hash_alg is not a supported
- *                      hash algorithm.
- */
-#define PSA_ALG_DSA(hash_alg)                             \
-    (PSA_ALG_DSA_BASE | ((hash_alg) & PSA_ALG_HASH_MASK))
-#define PSA_ALG_DETERMINISTIC_DSA_BASE          ((psa_algorithm_t) 0x06000500)
-#define PSA_ALG_DSA_DETERMINISTIC_FLAG PSA_ALG_ECDSA_DETERMINISTIC_FLAG
-/** Deterministic DSA signature with hashing.
- *
- * This is the deterministic variant defined by RFC 6979 of
- * the signature scheme defined by FIPS 186-4.
- *
- * \param hash_alg      A hash algorithm (\c PSA_ALG_XXX value such that
- *                      #PSA_ALG_IS_HASH(\p hash_alg) is true).
- *                      This includes #PSA_ALG_ANY_HASH
- *                      when specifying the algorithm in a usage policy.
- *
- * \return              The corresponding DSA signature algorithm.
- * \return              Unspecified if \p hash_alg is not a supported
- *                      hash algorithm.
- */
-#define PSA_ALG_DETERMINISTIC_DSA(hash_alg)                             \
-    (PSA_ALG_DETERMINISTIC_DSA_BASE | ((hash_alg) & PSA_ALG_HASH_MASK))
-#define PSA_ALG_IS_DSA(alg)                                             \
-    (((alg) & ~PSA_ALG_HASH_MASK & ~PSA_ALG_DSA_DETERMINISTIC_FLAG) ==  \
-     PSA_ALG_DSA_BASE)
-#define PSA_ALG_DSA_IS_DETERMINISTIC(alg)               \
-    (((alg) & PSA_ALG_DSA_DETERMINISTIC_FLAG) != 0)
-#define PSA_ALG_IS_DETERMINISTIC_DSA(alg)                       \
-    (PSA_ALG_IS_DSA(alg) && PSA_ALG_DSA_IS_DETERMINISTIC(alg))
-#define PSA_ALG_IS_RANDOMIZED_DSA(alg)                          \
-    (PSA_ALG_IS_DSA(alg) && !PSA_ALG_DSA_IS_DETERMINISTIC(alg))
-
-
-/* We need to expand the sample definition of this macro from
- * the API definition. */
-#undef PSA_ALG_IS_VENDOR_HASH_AND_SIGN
-#define PSA_ALG_IS_VENDOR_HASH_AND_SIGN(alg)    \
-    PSA_ALG_IS_DSA(alg)
-
-/**@}*/
-
-/** \addtogroup attributes
- * @{
- */
-
-/** PAKE operation stages. */
-#define PSA_PAKE_OPERATION_STAGE_SETUP 0
-#define PSA_PAKE_OPERATION_STAGE_COLLECT_INPUTS 1
-#define PSA_PAKE_OPERATION_STAGE_COMPUTATION 2
 
 /**@}*/
 
@@ -732,35 +636,54 @@ psa_status_t mbedtls_psa_platform_get_builtin_key(
 
 #define PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE        ((psa_key_type_t) 0x4400)
 #define PSA_KEY_TYPE_SPAKE2P_KEY_PAIR_BASE          ((psa_key_type_t) 0x7400)
+#define PSA_KEY_TYPE_SPAKE2P_CURVE_MASK             ((psa_key_type_t) 0x00ff)
 
 /** SPAKE2+ key pair.
  *
  * Not implemented yet.
  */
 #define PSA_KEY_TYPE_SPAKE2P_KEY_PAIR(curve)            \
-    (PSA_KEY_TYPE_SPAKE2P_KEY_PAIR_BASE | (curve))
+    (PSA_KEY_TYPE_SPAKE2P_KEY_PAIR_BASE | ((curve) & PSA_KEY_TYPE_SPAKE2P_CURVE_MASK))
 
 /** SPAKE2+ public key.
  *
- * Not implemented yet.
+ * The key material of a SPAKE2+ public key is the SPAKE2+ registration
+ * record \c w0 || \c L defined by RFC 9383: the scalar \c w0 encoded as
+ * a big-endian byte string of ceiling(m/8) bytes, where m is the bit
+ * size of the curve order, followed by the point \c L = \c w1 * \c G in
+ * uncompressed representation (`0x04 || x || y`). This is the format
+ * accepted by psa_import_key() and produced by psa_export_key().
+ *
+ * Only SECP_R1 curves are currently supported.
  */
 #define PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY(curve)          \
-    (PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE | (curve))
+    (PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE | ((curve) & PSA_KEY_TYPE_SPAKE2P_CURVE_MASK))
 
 /** Whether a key type is a SPAKE2+ key pair type. */
 #define PSA_KEY_TYPE_IS_SPAKE2P_KEY_PAIR(type)          \
-    (((type) & ~PSA_KEY_TYPE_ECC_CURVE_MASK) ==         \
+    (((type) & ~PSA_KEY_TYPE_SPAKE2P_CURVE_MASK) ==         \
      PSA_KEY_TYPE_SPAKE2P_KEY_PAIR_BASE)
 
 /** Whether a key type is a SPAKE2+ public key type. */
 #define PSA_KEY_TYPE_IS_SPAKE2P_PUBLIC_KEY(type)        \
-    (((type) & ~PSA_KEY_TYPE_ECC_CURVE_MASK) ==         \
+    (((type) & ~PSA_KEY_TYPE_SPAKE2P_CURVE_MASK) ==         \
      PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE)
 
 /** Whether a key type is a SPAKE2+ key pair or public key type. */
 #define PSA_KEY_TYPE_IS_SPAKE2P(type)                   \
     ((PSA_KEY_TYPE_PUBLIC_KEY_OF_KEY_PAIR(type) &       \
-      ~PSA_KEY_TYPE_ECC_CURVE_MASK) == PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE)
+      ~PSA_KEY_TYPE_SPAKE2P_CURVE_MASK) == PSA_KEY_TYPE_SPAKE2P_PUBLIC_KEY_BASE)
+
+/** Extract the ECC curve family from a SPAKE2+ key type.
+ *
+ * \param type A SPAKE2+ key type (key pair or public key).
+ *
+ * \return The elliptic curve family id (a \c PSA_ECC_FAMILY_xxx value).
+ */
+#define PSA_KEY_TYPE_SPAKE2P_GET_FAMILY(type) \
+    ((psa_ecc_family_t) (PSA_KEY_TYPE_IS_SPAKE2P(type) ? \
+                         ((type) & PSA_KEY_TYPE_SPAKE2P_CURVE_MASK) : \
+                         0))
 
 #define PSA_ALG_SPAKE2P_HMAC_BASE               ((psa_algorithm_t) 0x0a000400)
 
@@ -1019,8 +942,6 @@ typedef uint32_t psa_pake_primitive_t;
  */
 #define PSA_PAKE_STEP_CONFIRM                   ((psa_pake_step_t) 0x04)
 
-/**@}*/
-
 /** A sufficient output buffer size for psa_pake_output().
  *
  * If the size of the output buffer is at least this large, it is guaranteed
@@ -1042,12 +963,12 @@ typedef uint32_t psa_pake_primitive_t;
  *                      return 0.
  */
 #define PSA_PAKE_OUTPUT_SIZE(alg, primitive, output_step)               \
-    (PSA_ALG_IS_JPAKE(alg) &&                                           \
-     primitive == PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,      \
-                                     PSA_ECC_FAMILY_SECP_R1, 256) ?    \
+    (PSA_ALG_IS_JPAKE(alg) &&                                         \
+     (primitive) == PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,     \
+                                       PSA_ECC_FAMILY_SECP_R1, 256) ?    \
      (                                                                 \
-         output_step == PSA_PAKE_STEP_KEY_SHARE ? 65 :                   \
-         output_step == PSA_PAKE_STEP_ZK_PUBLIC ? 65 :                   \
+         (output_step) == PSA_PAKE_STEP_KEY_SHARE ? 65 :                \
+         (output_step) == PSA_PAKE_STEP_ZK_PUBLIC ? 65 :                \
          32                                                              \
      ) :                                                               \
      0)
@@ -1072,12 +993,12 @@ typedef uint32_t psa_pake_primitive_t;
  *                      the parameters are incompatible, return 0.
  */
 #define PSA_PAKE_INPUT_SIZE(alg, primitive, input_step)                 \
-    (PSA_ALG_IS_JPAKE(alg) &&                                           \
-     primitive == PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,      \
-                                     PSA_ECC_FAMILY_SECP_R1, 256) ?    \
+    (PSA_ALG_IS_JPAKE(alg) &&                                         \
+     (primitive) == PSA_PAKE_PRIMITIVE(PSA_PAKE_PRIMITIVE_TYPE_ECC,     \
+                                       PSA_ECC_FAMILY_SECP_R1, 256) ?    \
      (                                                                 \
-         input_step == PSA_PAKE_STEP_KEY_SHARE ? 65 :                    \
-         input_step == PSA_PAKE_STEP_ZK_PUBLIC ? 65 :                    \
+         (input_step) == PSA_PAKE_STEP_KEY_SHARE ? 65 :                 \
+         (input_step) == PSA_PAKE_STEP_ZK_PUBLIC ? 65 :                 \
          32                                                              \
      ) :                                                               \
      0)
@@ -1205,6 +1126,11 @@ struct psa_jpake_computation_stage_s {
     psa_pake_step_t MBEDTLS_PRIVATE(step);
 };
 
+/* PAKE operation stages. */
+#define PSA_PAKE_OPERATION_STAGE_SETUP 0
+#define PSA_PAKE_OPERATION_STAGE_COLLECT_INPUTS 1
+#define PSA_PAKE_OPERATION_STAGE_COMPUTATION 2
+
 #define PSA_JPAKE_EXPECTED_INPUTS(round) ((round) == PSA_JPAKE_FINISHED ? 0 : \
                                           ((round) == PSA_JPAKE_FIRST ? 2 : 1))
 #define PSA_JPAKE_EXPECTED_OUTPUTS(round) ((round) == PSA_JPAKE_FINISHED ? 0 : \
@@ -1241,10 +1167,6 @@ struct psa_pake_operation_s {
     } MBEDTLS_PRIVATE(data);
 #endif
 };
-
-/** \addtogroup pake
- * @{
- */
 
 /** The type of the data structure for PAKE cipher suites.
  *
@@ -2037,8 +1959,6 @@ psa_status_t psa_pake_get_shared_key(psa_pake_operation_t *operation,
  */
 psa_status_t psa_pake_abort(psa_pake_operation_t *operation);
 
-/**@}*/
-
 static inline psa_algorithm_t psa_pake_cs_get_algorithm(
     const psa_pake_cipher_suite_t *cipher_suite)
 {
@@ -2107,6 +2027,43 @@ static inline struct psa_pake_operation_s psa_pake_operation_init(void)
     const struct psa_pake_operation_s v = PSA_PAKE_OPERATION_INIT;
     return v;
 }
+
+/**@}*/
+
+/** \addtogroup key_derivation */
+
+/** Flag to request storing a key in an expanded representation internally.
+ *
+ * This flag can be used in the
+ * struct psa_custom_key_parameters_s::flags \c custom
+ * parameter of psa_generate_key_custom() and
+ * psa_key_derivation_output_key_custom(), to request that the key be
+ * stored in a different format internally.
+ *
+ * If this flag is set when creating a key of a supported type, the key
+ * is stored in RAM in an expanded format that takes more room, but
+ * allows computations to be faster. The expanded format may also
+ * allow computations not to use the heap.
+ *
+ * This flag is supported for the following key formats:
+ * - ML-DSA, which is not yet accessible through the library interface.
+ *
+ * This flag does not affect the observable behavior of any public function
+ * of the library.
+ *
+ * It is unspecified whether this flag affects the persistent key storage
+ * format, or whether this flag affects persistent keys after they have
+ * been reloaded.
+ *
+ * \note This flag is experimental.
+ *       Its semantics may change without notice.
+ *       Its value may change without notice.
+ *       It may be removed without notice.
+ *       The set of supported key types may change without notice.
+ */
+#define PSA_CUSTOM_KEY_FLAG_EXPAND ((uint32_t) 0x40000000u)
+
+/**@}*/
 
 #ifdef __cplusplus
 }
